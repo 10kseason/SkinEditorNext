@@ -10,6 +10,8 @@
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
+                <MenuItem Header="New Skin..." Click="NewSkin_Click"/>
+                <Separator/>
                 <MenuItem Header="Open..." Click="Open_Click"/>
                 <MenuItem Header="Save" Click="Save_Click"/>
                 <MenuItem Header="Save As..." Click="SaveAs_Click"/>
@@ -30,6 +32,7 @@
             <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="0,0,0,1" Padding="10,8">
                 <DockPanel LastChildFill="True">
                     <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                        <Button Content="New" Click="NewSkin_Click" MinWidth="76" Margin="0,0,6,0"/>
                         <Button Content="Open" Click="Open_Click" MinWidth="76" Margin="0,0,6,0"/>
                         <Button Content="Save" Click="Save_Click" MinWidth="76" Margin="0,0,6,0"/>
                         <Button Content="Save As" Click="SaveAs_Click" MinWidth="86" Margin="0,0,14,0"/>
@@ -45,7 +48,7 @@
 
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="340"/>
+                    <ColumnDefinition Width="430"/>
                     <ColumnDefinition Width="5"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
@@ -53,6 +56,8 @@
                 <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="0,0,1,0" Padding="12">
                     <Grid>
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
@@ -96,6 +101,155 @@
                         </Border>
 
                         <Border Grid.Row="2" BorderBrush="#E5E7EB" BorderThickness="1" Padding="10" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <DockPanel Grid.Row="0">
+                                    <TextBlock Text="Assets" FontWeight="SemiBold" Foreground="#111827" DockPanel.Dock="Left"/>
+                                    <TextBlock x:Name="AssetsSummaryText"
+                                               Foreground="#6B7280"
+                                               TextAlignment="Right"/>
+                                </DockPanel>
+                                <ComboBox x:Name="ImageAssetBox"
+                                          Grid.Row="1"
+                                          DisplayMemberPath="DisplayName"
+                                          Margin="0,8,0,8"/>
+                                <Button Grid.Row="2"
+                                        Content="Add Image..."
+                                        Click="AddImage_Click"
+                                        HorizontalAlignment="Stretch"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="3" BorderBrush="#E5E7EB" BorderThickness="1" Padding="10" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Create Object" FontWeight="SemiBold" Foreground="#111827"/>
+                                <UniformGrid Grid.Row="1" Columns="2" Margin="0,8,0,8">
+                                    <StackPanel Margin="0,0,6,0">
+                                        <TextBlock Text="Kind" Foreground="#4B5563"/>
+                                        <ComboBox x:Name="CreateKindBox" SelectedIndex="0">
+                                            <ComboBoxItem Content="Image" Tag="image"/>
+                                            <ComboBoxItem Content="Text" Tag="text"/>
+                                            <ComboBoxItem Content="Number" Tag="number"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Margin="6,0,0,0">
+                                        <TextBlock Text="Text Kind / Number Op1" Foreground="#4B5563"/>
+                                        <TextBox x:Name="CreateValueBox" Text="11"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <UniformGrid Grid.Row="2" Columns="4">
+                                    <StackPanel Margin="0,0,4,6">
+                                        <TextBlock Text="X"/>
+                                        <TextBox x:Name="CreateXBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="Y"/>
+                                        <TextBox x:Name="CreateYBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="W"/>
+                                        <TextBox x:Name="CreateWidthBox" Text="320"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,6">
+                                        <TextBlock Text="H"/>
+                                        <TextBox x:Name="CreateHeightBox" Text="180"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <UniformGrid Grid.Row="3" Columns="5">
+                                    <StackPanel Margin="0,0,4,6">
+                                        <TextBlock Text="Time"/>
+                                        <TextBox x:Name="CreateTimeBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="Alpha"/>
+                                        <TextBox x:Name="CreateAlphaBox" Text="255"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="R"/>
+                                        <TextBox x:Name="CreateRedBox" Text="255"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="G"/>
+                                        <TextBox x:Name="CreateGreenBox" Text="255"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,6">
+                                        <TextBlock Text="B"/>
+                                        <TextBox x:Name="CreateBlueBox" Text="255"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <UniformGrid Grid.Row="4" Columns="5">
+                                    <StackPanel Margin="0,0,4,6">
+                                        <TextBlock Text="Acc"/>
+                                        <TextBox x:Name="CreateAccBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="Blend"/>
+                                        <TextBox x:Name="CreateBlendBox" Text="1"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="Filter"/>
+                                        <TextBox x:Name="CreateFilterBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="Angle"/>
+                                        <TextBox x:Name="CreateAngleBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,6">
+                                        <TextBlock Text="Center"/>
+                                        <TextBox x:Name="CreateCenterBox" Text="0"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <UniformGrid Grid.Row="5" Columns="7">
+                                    <StackPanel Margin="0,0,4,8">
+                                        <TextBlock Text="Loop"/>
+                                        <TextBox x:Name="CreateLoopBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,8">
+                                        <TextBlock Text="Timer"/>
+                                        <TextBox x:Name="CreateTimerBox" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,8">
+                                        <TextBlock Text="Op1"/>
+                                        <TextBox x:Name="CreateOp1Box" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,8">
+                                        <TextBlock Text="Op2"/>
+                                        <TextBox x:Name="CreateOp2Box" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,8">
+                                        <TextBlock Text="Op3"/>
+                                        <TextBox x:Name="CreateOp3Box" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,8">
+                                        <TextBlock Text="Op4"/>
+                                        <TextBox x:Name="CreateOp4Box" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,8">
+                                        <TextBlock Text="Op5"/>
+                                        <TextBox x:Name="CreateOp5Box" Text="0"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <Button Grid.Row="6"
+                                        Content="Add Object"
+                                        Click="AddObject_Click"
+                                        HorizontalAlignment="Stretch"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="4" BorderBrush="#E5E7EB" BorderThickness="1" Padding="10" Margin="0,0,0,12">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -154,7 +308,7 @@
                         </Border>
 
                         <DataGrid x:Name="ObjectsGrid"
-                                  Grid.Row="3"
+                                  Grid.Row="5"
                                   AutoGenerateColumns="False"
                                   IsReadOnly="True"
                                   SelectionMode="Single"

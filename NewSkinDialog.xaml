@@ -1,0 +1,74 @@
+<Window x:Class="SkinEditorNext.NewSkinDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="New LR2 Skin"
+        Width="430"
+        Height="430"
+        MinWidth="430"
+        MinHeight="430"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#F3F4F6">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="Skin Type" FontWeight="SemiBold" Foreground="#111827"/>
+            <ComboBox x:Name="SkinTypeBox" Margin="0,6,0,12" SelectedIndex="0">
+                <ComboBoxItem Content="0 - 7KEYS" Tag="0"/>
+                <ComboBoxItem Content="1 - 5KEYS" Tag="1"/>
+                <ComboBoxItem Content="2 - 14KEYS" Tag="2"/>
+                <ComboBoxItem Content="3 - 10KEYS" Tag="3"/>
+                <ComboBoxItem Content="4 - 9KEYS" Tag="4"/>
+                <ComboBoxItem Content="5 - MUSICSELECT" Tag="5"/>
+                <ComboBoxItem Content="6 - DECIDE" Tag="6"/>
+                <ComboBoxItem Content="7 - RESULT" Tag="7"/>
+                <ComboBoxItem Content="12 - 7KEYS BATTLE" Tag="12"/>
+                <ComboBoxItem Content="13 - 5KEYS BATTLE" Tag="13"/>
+                <ComboBoxItem Content="15 - COURSE RESULT" Tag="15"/>
+            </ComboBox>
+
+            <TextBlock Text="Title" FontWeight="SemiBold" Foreground="#111827"/>
+            <TextBox x:Name="TitleBox" Margin="0,6,0,12" Text="New LR2 Skin"/>
+
+            <TextBlock Text="Maker" FontWeight="SemiBold" Foreground="#111827"/>
+            <TextBox x:Name="MakerBox" Margin="0,6,0,12"/>
+
+            <TextBlock Text="Thumbnail Path" FontWeight="SemiBold" Foreground="#111827"/>
+            <TextBox x:Name="ThumbnailBox" Margin="0,6,0,12"/>
+
+            <TextBlock Text="Resolution" FontWeight="SemiBold" Foreground="#111827"/>
+            <UniformGrid Columns="2" Margin="0,6,0,0">
+                <StackPanel Margin="0,0,6,0">
+                    <TextBlock Text="Width" Foreground="#4B5563"/>
+                    <TextBox x:Name="WidthBox" Text="1280"/>
+                </StackPanel>
+                <StackPanel Margin="6,0,0,0">
+                    <TextBlock Text="Height" Foreground="#4B5563"/>
+                    <TextBox x:Name="HeightBox" Text="720"/>
+                </StackPanel>
+            </UniformGrid>
+        </StackPanel>
+
+        <DockPanel Grid.Row="1" LastChildFill="False" Margin="0,16,0,0">
+            <TextBlock x:Name="StatusText"
+                       DockPanel.Dock="Left"
+                       VerticalAlignment="Center"
+                       Foreground="#B91C1C"/>
+            <Button Content="Cancel"
+                    Width="82"
+                    Margin="8,0,0,0"
+                    IsCancel="True"
+                    DockPanel.Dock="Right"/>
+            <Button Content="Create"
+                    Width="92"
+                    Margin="8,0,0,0"
+                    IsDefault="True"
+                    Click="Create_Click"
+                    DockPanel.Dock="Right"/>
+        </DockPanel>
+    </Grid>
+</Window>

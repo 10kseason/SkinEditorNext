@@ -127,7 +127,11 @@ public sealed class Lr2SkinParser
 
             if (fields.Count == 0) continue;
 
-            if (IsCommand(fields[0], "#RESOLUTION"))
+            if (IsCommand(fields[0], "#INFORMATION"))
+            {
+                document.Header = ParseHeader(fields);
+            }
+            else if (IsCommand(fields[0], "#RESOLUTION"))
             {
                 document.Resolution = ParseResolution(fields, document.Diagnostics);
             }
@@ -177,6 +181,18 @@ public sealed class Lr2SkinParser
         };
     }
 
+    private static SkinHeaderInfo ParseHeader(IReadOnlyList<string> fields)
+    {
+        return new SkinHeaderInfo(
+            CsvUtil.IntAt(fields, 1),
+            StringAt(fields, 2),
+            StringAt(fields, 3),
+            StringAt(fields, 4),
+            CsvUtil.IntAt(fields, 5),
+            CsvUtil.IntAt(fields, 6),
+            CsvUtil.IntAt(fields, 7));
+    }
+
     private static ResolutionInfo WarnAndDefault(int preset, ICollection<string> diagnostics)
     {
         diagnostics.Add($"Unknown #RESOLUTION preset '{preset}', using 640x480.");
@@ -185,13 +201,21 @@ public sealed class Lr2SkinParser
 
     private static void BuildObjects(Lr2SkinDocument document)
     {
+        // LR2 assigns image/font slots by command order. These lists mirror that order so the creator UI
+        // can show the same slot numbers that #SRC_* commands must reference.
         var images = new Dictionary<int, string>();
         var imageIndex = 0;
+        var fontIndex = 0;
         var sourcesByKey = new Dictionary<SourceKey, SkinObjectView>();
         var latestSourceBySuffix = new Dictionary<string, SkinObjectView>(StringComparer.OrdinalIgnoreCase);
         var ifStack = new List<IfFrame>();
         var id = 1;
 
+        document.Objects.Clear();
+        document.ImageSlots.Clear();
+        document.FontSlots.Clear();
+        document.CustomOptions.Clear();
+        document.CustomFiles.Clear();
         document.ActiveOptions.Clear();
         document.ActiveOptions.Add(0);
 
@@ -202,11 +226,24 @@ public sealed class Lr2SkinParser
 
             if (IsCommand(command, "#CUSTOMOPTION"))
             {
+                // Default LR2 behavior selects the first custom option label, so add its start option.
+                document.CustomOptions.Add(ParseCustomOption(line));
                 var firstOption = CsvUtil.IntAt(line.Fields, 2, -1);
                 if (firstOption is >= 0 and <= 999)
                 {
                     document.ActiveOptions.Add(firstOption);
                 }
+                continue;
+            }
+
+            if (IsCommand(command, "#CUSTOMFILE") && line.Fields.Count >= 4)
+            {
+                document.CustomFiles.Add(new CustomFileDefinition(
+                    StringAt(line.Fields, 1),
+                    StringAt(line.Fields, 2),
+                    StringAt(line.Fields, 3),
+                    line.SourcePath,
+                    line.SourceLine));
                 continue;
             }
 
@@ -217,18 +254,40 @@ public sealed class Lr2SkinParser
 
             if (!IsActive(ifStack))
             {
+                // Hidden #IF branches are preserved in Lines/Code mode, but excluded from the active preview.
                 continue;
             }
 
             if (IsCommand(command, "#IMAGE"))
             {
                 var imagePath = line.Fields.Count > 1 ? line.Fields[1] : string.Empty;
-                images[imageIndex++] = ResolvePath(line.SourcePath, imagePath, document.CustomFileRules) ?? imagePath;
+                var resolvedPath = ResolvePath(line.SourcePath, imagePath, document.CustomFileRules) ?? imagePath;
+                images[imageIndex] = resolvedPath;
+                document.ImageSlots.Add(new SkinImageSlot(
+                    imageIndex,
+                    imagePath,
+                    resolvedPath,
+                    line.SourcePath,
+                    line.SourceLine));
+                imageIndex++;
+                continue;
+            }
+
+            if (IsCommand(command, "#FONT") || IsCommand(command, "#LR2FONT"))
+            {
+                document.FontSlots.Add(new SkinFontSlot(
+                    fontIndex++,
+                    command.TrimStart('#').ToUpperInvariant(),
+                    line.RawText,
+                    line.SourcePath,
+                    line.SourceLine));
                 continue;
             }
 
             if (command.StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase))
             {
+                // A following #DST_* is matched by suffix and n value. If older skins omit a clean match,
+                // fall back to the latest source with the same suffix, matching LR2's loose loading style.
                 var source = CreateSourceObject(line, images, id++);
                 document.Objects.Add(source);
                 sourcesByKey[new SourceKey(source.CommandSuffix, source.SourceIndex)] = source;
@@ -259,8 +318,12 @@ public sealed class Lr2SkinParser
         int id)
     {
         var fields = line.Fields;
+        var suffix = CommandSuffix(line.Command, "#SRC_");
         var graph = CsvUtil.IntAt(fields, 2, -1);
-        var imagePath = images.TryGetValue(graph, out var path) ? path : string.Empty;
+        var imagePath = !string.Equals(suffix, "TEXT", StringComparison.OrdinalIgnoreCase) &&
+                        images.TryGetValue(graph, out var path)
+            ? path
+            : string.Empty;
         var divX = Math.Max(1, CsvUtil.IntAt(fields, 7, 1));
         var divY = Math.Max(1, CsvUtil.IntAt(fields, 8, 1));
 
@@ -268,7 +331,7 @@ public sealed class Lr2SkinParser
         {
             Id = id,
             Kind = line.Command,
-            CommandSuffix = CommandSuffix(line.Command, "#SRC_"),
+            CommandSuffix = suffix,
             ImagePath = imagePath,
             SourceFile = line.SourcePath,
             SrcLine = line.SourceLine,
@@ -289,6 +352,29 @@ public sealed class Lr2SkinParser
             SourceOp4 = CsvUtil.IntAt(fields, 14),
             SourceOp5 = CsvUtil.IntAt(fields, 15)
         };
+    }
+
+    private static CustomOptionDefinition ParseCustomOption(SkinCommandLine line)
+    {
+        var labels = new List<string>();
+        for (var i = 3; i < line.Fields.Count; i++)
+        {
+            var label = line.Fields[i].Trim();
+            if (string.IsNullOrWhiteSpace(label)) continue;
+            labels.Add(label);
+        }
+
+        return new CustomOptionDefinition(
+            StringAt(line.Fields, 1),
+            CsvUtil.IntAt(line.Fields, 2),
+            labels,
+            line.SourcePath,
+            line.SourceLine);
+    }
+
+    private static string StringAt(IReadOnlyList<string> fields, int index)
+    {
+        return index >= 0 && index < fields.Count ? fields[index].Trim() : string.Empty;
     }
 
     private static void AddDstFrame(SkinObjectView target, SkinCommandLine line)

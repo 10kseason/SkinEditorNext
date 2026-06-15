@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using SkinEditorNext.Services;
 
@@ -27,6 +28,18 @@ public partial class App : Application
             var outputPath = e.Args.Length >= 4 ? e.Args[3] : e.Args[2];
             var mode = e.Args.Length >= 5 ? e.Args[4] : "playing";
             RunRenderPng(e.Args[1], timeMs, outputPath, mode);
+            return;
+        }
+
+        if (e.Args.Length >= 2 && string.Equals(e.Args[0], "--create-skin", StringComparison.OrdinalIgnoreCase))
+        {
+            RunCreateSkin(e.Args);
+            return;
+        }
+
+        if (e.Args.Length >= 3 && string.Equals(e.Args[0], "--create-skin-smoke", StringComparison.OrdinalIgnoreCase))
+        {
+            RunCreateSkinSmoke(e.Args[1], e.Args[2]);
             return;
         }
 
@@ -109,5 +122,75 @@ public partial class App : Application
             Console.Error.WriteLine(ex);
             Shutdown(1);
         }
+    }
+
+    private void RunCreateSkin(string[] args)
+    {
+        try
+        {
+            var path = args[1];
+            var type = args.Length >= 3 && int.TryParse(args[2], out var parsedType) ? parsedType : Lr2SkinWriter.DefaultSettings.SkinType;
+            var width = args.Length >= 4 && int.TryParse(args[3], out var parsedWidth) ? parsedWidth : Lr2SkinWriter.DefaultSettings.Width;
+            var height = args.Length >= 5 && int.TryParse(args[4], out var parsedHeight) ? parsedHeight : Lr2SkinWriter.DefaultSettings.Height;
+            var title = args.Length >= 6 ? args[5] : Lr2SkinWriter.DefaultSettings.Title;
+            var settings = new NewSkinSettings(type, title, string.Empty, string.Empty, width, height);
+
+            WriteText(path, Lr2SkinWriter.CreateNewSkin(settings));
+            Console.WriteLine($"created={path}");
+            Shutdown(0);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            Shutdown(1);
+        }
+    }
+
+    private void RunCreateSkinSmoke(string path, string imagePath)
+    {
+        try
+        {
+            var fullImagePath = Path.GetFullPath(imagePath);
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? Environment.CurrentDirectory;
+            var relativeImagePath = Path.GetRelativePath(directory, fullImagePath);
+            var text = Lr2SkinWriter.CreateNewSkin(Lr2SkinWriter.DefaultSettings);
+
+            if (!Lr2ImageProbe.TryGetSize(fullImagePath, out var width, out var height))
+            {
+                width = 320;
+                height = 180;
+            }
+
+            var dst = new Lr2DstSpec(0, 0, 0, width, height, 0, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            var lines = new List<string>
+            {
+                string.Empty,
+                "// SkinEditorNext smoke object",
+                Lr2SkinWriter.ImageLine(relativeImagePath)
+            };
+            lines.AddRange(Lr2SkinWriter.ImageObjectLines(0, width, height, dst));
+
+            WriteText(path, text + string.Join(Environment.NewLine, lines) + Environment.NewLine);
+            Console.WriteLine($"created={path}");
+            Console.WriteLine($"image={relativeImagePath}");
+            Console.WriteLine($"size={width}x{height}");
+            Shutdown(0);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            Shutdown(1);
+        }
+    }
+
+    private static void WriteText(string path, string text)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(path, text, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 }

@@ -29,6 +29,42 @@ public partial class MainWindow : Window
         SetEmptyState();
     }
 
+    private void NewSkin_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new NewSkinDialog
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        var saveDialog = new SaveFileDialog
+        {
+            Filter = "LR2 skin files (*.lr2skin)|*.lr2skin|All files (*.*)|*.*",
+            Title = "Create LR2 skin",
+            FileName = MakeSafeFileName(dialog.Settings.Title) + ".lr2skin"
+        };
+
+        if (saveDialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            var text = Lr2SkinWriter.CreateNewSkin(dialog.Settings);
+            File.WriteAllText(saveDialog.FileName, text, encoding);
+            _bitmapFactory.Clear();
+            _document = _parser.ParseMainText(saveDialog.FileName, text, encoding);
+            SetEditorText(text, markDirty: false);
+            UpdateDocumentViews();
+            RenderPreview();
+            SetStatus($"Created {IOPath.GetFileName(saveDialog.FileName)}.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "New skin failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void Open_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog
@@ -131,6 +167,115 @@ public partial class MainWindow : Window
         RefreshDocumentFromEditor(item.Id);
         RenderPreview();
         SetStatus($"Applied object geometry for #{item.Id}.");
+    }
+
+    private void AddImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetDocumentDirectory(out var directory)) return;
+
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Image files (*.png;*.bmp;*.tga)|*.png;*.bmp;*.tga|All files (*.*)|*.*",
+            Title = "Add LR2 image asset",
+            Multiselect = true
+        };
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        var lines = new List<string>();
+        try
+        {
+            // New assets are copied next to the skin so exported .lr2skin files stay portable.
+            // Existing names are never overwritten; GetUniqueAssetPath adds _1, _2, ...
+            var assetDirectory = IOPath.Combine(directory, "assets");
+            Directory.CreateDirectory(assetDirectory);
+
+            foreach (var sourcePath in dialog.FileNames)
+            {
+                var extension = IOPath.GetExtension(sourcePath);
+                if (!IsSupportedImageExtension(extension))
+                {
+                    SetStatus($"Unsupported image extension: {extension}");
+                    continue;
+                }
+
+                var destinationPath = GetUniqueAssetPath(assetDirectory, IOPath.GetFileName(sourcePath));
+                File.Copy(sourcePath, destinationPath, overwrite: false);
+                var relativePath = IOPath.GetRelativePath(directory, destinationPath);
+                lines.Add(Lr2SkinWriter.ImageLine(relativePath));
+            }
+
+            if (lines.Count == 0) return;
+            AppendGeneratedLines(lines, "image asset");
+            _bitmapFactory.Clear();
+            RefreshDocumentFromEditor();
+            ImageAssetBox.SelectedItem = _document?.ImageSlots.LastOrDefault();
+            RenderPreview();
+            SetStatus($"Added {lines.Count} image asset(s).");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Add image failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void AddObject_Click(object sender, RoutedEventArgs e)
+    {
+        if (_document is null)
+        {
+            SetStatus("Create or open a .lr2skin file first.");
+            return;
+        }
+
+        if (!TryReadDstSpec(out var dst)) return;
+
+        var kind = ReadCreateKind();
+        var lines = new List<string>();
+        var selectNewestObject = true;
+
+        if (string.Equals(kind, "text", StringComparison.OrdinalIgnoreCase))
+        {
+            // Text can work without an image asset. If the skin has no font slot yet, create a simple #FONT.
+            if (!TryReadInt(CreateValueBox, "text kind", out var textKind)) return;
+            var fontSlot = _document.FontSlots.FirstOrDefault()?.Index ?? _document.FontSlots.Count;
+            if (_document.FontSlots.Count == 0)
+            {
+                lines.Add(Lr2SkinWriter.FontLine());
+            }
+
+            lines.AddRange(Lr2SkinWriter.TextObjectLines(fontSlot, textKind, align: 1, dst));
+        }
+        else
+        {
+            if (!TryGetSelectedImageSlot(out var imageSlot)) return;
+            var sourceWidth = dst.Width;
+            var sourceHeight = dst.Height;
+            // For image/number objects, default SRC size to the actual asset size when it can be read.
+            if (Lr2ImageProbe.TryGetSize(imageSlot.ResolvedPath, out var imageWidth, out var imageHeight))
+            {
+                sourceWidth = imageWidth;
+                sourceHeight = imageHeight;
+            }
+
+            if (string.Equals(kind, "number", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadInt(CreateValueBox, "number op1", out var numberOp)) return;
+                lines.AddRange(Lr2SkinWriter.NumberObjectLines(imageSlot.Index, sourceWidth, sourceHeight, numberOp, dst));
+            }
+            else
+            {
+                lines.AddRange(Lr2SkinWriter.ImageObjectLines(imageSlot.Index, sourceWidth, sourceHeight, dst));
+            }
+        }
+
+        AppendGeneratedLines(lines, $"{kind} object");
+        RefreshDocumentFromEditor();
+        if (selectNewestObject)
+        {
+            ObjectsGrid.SelectedItem = _document?.Objects.LastOrDefault();
+        }
+        RenderPreview();
+        SetStatus($"Added {kind} object.");
     }
 
     private void ObjectsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -253,6 +398,14 @@ public partial class MainWindow : Window
             ? "No diagnostics."
             : string.Join(Environment.NewLine, _document.Diagnostics);
 
+        AssetsSummaryText.Text = $"{_document.ImageSlots.Count:N0} image(s)";
+        ImageAssetBox.ItemsSource = null;
+        ImageAssetBox.ItemsSource = _document.ImageSlots;
+        if (_document.ImageSlots.Count > 0 && ImageAssetBox.SelectedItem is null)
+        {
+            ImageAssetBox.SelectedIndex = 0;
+        }
+
         ObjectsGrid.ItemsSource = null;
         ObjectsGrid.ItemsSource = _document.Objects;
 
@@ -320,6 +473,12 @@ public partial class MainWindow : Window
         if (dest.Width <= 0 || dest.Height <= 0) return;
 
         var skinObject = item.Object;
+        if (skinObject.Kind.Equals("#SRC_TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            AddTextPlaceholder(item, new Rect(dest.X, dest.Y, dest.Width, dest.Height));
+            return;
+        }
+
         if (_bitmapFactory.TryCreateFrameBitmap(item, out var frameBitmap))
         {
             var image = new Image
@@ -356,6 +515,35 @@ public partial class MainWindow : Window
         Canvas.SetLeft(outline, dest.X);
         Canvas.SetTop(outline, dest.Y);
         PreviewCanvas.Children.Add(outline);
+    }
+
+    private void AddTextPlaceholder(Lr2PreviewItem item, Rect dest)
+    {
+        var border = new Border
+        {
+            Width = dest.Width,
+            Height = dest.Height,
+            Opacity = item.Opacity,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(250, 204, 21)),
+            BorderThickness = new Thickness(1),
+            Background = new SolidColorBrush(Color.FromArgb(32, (byte)item.Red, (byte)item.Green, (byte)item.Blue)),
+            Child = new TextBlock
+            {
+                Text = "TEXT",
+                Foreground = new SolidColorBrush(Color.FromRgb((byte)item.Red, (byte)item.Green, (byte)item.Blue)),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = Math.Clamp(dest.Height * 0.45, 10, 28),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            },
+            IsHitTestVisible = false
+        };
+
+        ApplyRotation(border, item.Angle, item.Center);
+        Canvas.SetLeft(border, dest.X);
+        Canvas.SetTop(border, dest.Y);
+        PreviewCanvas.Children.Add(border);
     }
 
     private static void ApplyRotation(FrameworkElement element, double angle, int center)
@@ -430,6 +618,51 @@ public partial class MainWindow : Window
         return false;
     }
 
+    private bool TryReadDstSpec(out Lr2DstSpec spec)
+    {
+        spec = new Lr2DstSpec(0, 0, 0, 1, 1, 0, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+        if (!TryReadInt(CreateTimeBox, "time", out var time) ||
+            !TryReadInt(CreateXBox, "x", out var x) ||
+            !TryReadInt(CreateYBox, "y", out var y) ||
+            !TryReadPositiveInt(CreateWidthBox, "width", out var width) ||
+            !TryReadPositiveInt(CreateHeightBox, "height", out var height) ||
+            !TryReadInt(CreateAccBox, "acc", out var acc) ||
+            !TryReadInt(CreateAlphaBox, "alpha", out var alpha) ||
+            !TryReadInt(CreateRedBox, "red", out var red) ||
+            !TryReadInt(CreateGreenBox, "green", out var green) ||
+            !TryReadInt(CreateBlueBox, "blue", out var blue) ||
+            !TryReadInt(CreateBlendBox, "blend", out var blend) ||
+            !TryReadInt(CreateFilterBox, "filter", out var filter) ||
+            !TryReadDouble(CreateAngleBox, "angle", out var angle) ||
+            !TryReadInt(CreateCenterBox, "center", out var center) ||
+            !TryReadInt(CreateLoopBox, "loop", out var loop) ||
+            !TryReadInt(CreateTimerBox, "timer", out var timer) ||
+            !TryReadInt(CreateOp1Box, "op1", out var op1) ||
+            !TryReadInt(CreateOp2Box, "op2", out var op2) ||
+            !TryReadInt(CreateOp3Box, "op3", out var op3) ||
+            !TryReadInt(CreateOp4Box, "op4", out var op4) ||
+            !TryReadInt(CreateOp5Box, "op5", out var op5))
+        {
+            return false;
+        }
+
+        spec = new Lr2DstSpec(time, x, y, width, height, acc, alpha, red, green, blue, blend, filter, angle, center, loop, timer, op1, op2, op3, op4, op5);
+        return true;
+    }
+
+    private bool TryReadDouble(TextBox box, string label, out double value)
+    {
+        if (double.TryParse(box.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        SetStatus($"{label} is not a valid number.");
+        box.Focus();
+        return false;
+    }
+
     private bool TryReadPositiveInt(TextBox box, string label, out int value)
     {
         if (TryReadInt(box, label, out value) && value > 0) return true;
@@ -450,6 +683,94 @@ public partial class MainWindow : Window
         return false;
     }
 
+    private bool TryGetDocumentDirectory(out string directory)
+    {
+        directory = string.Empty;
+        if (_document is null || string.IsNullOrWhiteSpace(_document.MainPath))
+        {
+            SetStatus("Create or open a .lr2skin file first.");
+            return false;
+        }
+
+        directory = IOPath.GetDirectoryName(IOPath.GetFullPath(_document.MainPath)) ?? Environment.CurrentDirectory;
+        return true;
+    }
+
+    private bool TryGetSelectedImageSlot(out SkinImageSlot imageSlot)
+    {
+        if (ImageAssetBox.SelectedItem is SkinImageSlot selected)
+        {
+            imageSlot = selected;
+            return true;
+        }
+
+        if (_document?.ImageSlots.Count > 0)
+        {
+            imageSlot = _document.ImageSlots[0];
+            ImageAssetBox.SelectedIndex = 0;
+            return true;
+        }
+
+        imageSlot = null!;
+        SetStatus("Add or select an image asset first.");
+        return false;
+    }
+
+    private string ReadCreateKind()
+    {
+        return CreateKindBox.SelectedItem is ComboBoxItem item && item.Tag is string tag ? tag : "image";
+    }
+
+    private void AppendGeneratedLines(IReadOnlyList<string> lines, string label)
+    {
+        // v1 deliberately appends to the main .lr2skin text only. Include editing is read/preview-only
+        // until we have a safer per-include save policy.
+        var text = CodeEditor.Text.Replace("\r\n", "\n").Replace('\r', '\n');
+        var builder = new StringBuilder(text);
+        if (builder.Length > 0 && !text.EndsWith('\n'))
+        {
+            builder.Append('\n');
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"// SkinEditorNext generated {label}");
+        foreach (var line in lines)
+        {
+            builder.AppendLine(line);
+        }
+
+        SetEditorText(builder.ToString().Replace("\n", Environment.NewLine), markDirty: true);
+    }
+
+    private static bool IsSupportedImageExtension(string extension)
+    {
+        return extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".tga", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetUniqueAssetPath(string directory, string fileName)
+    {
+        var stem = IOPath.GetFileNameWithoutExtension(fileName);
+        var extension = IOPath.GetExtension(fileName);
+        var candidate = IOPath.Combine(directory, fileName);
+        var suffix = 1;
+        while (File.Exists(candidate))
+        {
+            candidate = IOPath.Combine(directory, $"{stem}_{suffix}{extension}");
+            suffix++;
+        }
+
+        return candidate;
+    }
+
+    private static string MakeSafeFileName(string value)
+    {
+        var invalid = IOPath.GetInvalidFileNameChars();
+        var cleaned = new string(value.Trim().Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        return string.IsNullOrWhiteSpace(cleaned) ? "new" : cleaned;
+    }
+
     private void SetEmptyState()
     {
         FilePathText.Text = "No file loaded.";
@@ -458,6 +779,8 @@ public partial class MainWindow : Window
         FooterText.Text = "Ready.";
         DiagnosticsBox.Text = string.Empty;
         ObjectsGrid.ItemsSource = null;
+        ImageAssetBox.ItemsSource = null;
+        AssetsSummaryText.Text = "0 image(s)";
         ResolutionWidthBox.Text = "640";
         ResolutionHeightBox.Text = "480";
         PreviewCanvas.Width = 640;
