@@ -1,0 +1,275 @@
+<Window x:Class="SkinEditorNext.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LR2 Skin Editor Next"
+        Height="860"
+        Width="1320"
+        MinHeight="680"
+        MinWidth="1060"
+        Background="#F3F4F6">
+    <DockPanel>
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="Open..." Click="Open_Click"/>
+                <MenuItem Header="Save" Click="Save_Click"/>
+                <MenuItem Header="Save As..." Click="SaveAs_Click"/>
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="Validate" Click="Validate_Click"/>
+                <MenuItem Header="Refresh Preview" Click="RefreshPreview_Click"/>
+            </MenuItem>
+        </Menu>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="0,0,0,1" Padding="10,8">
+                <DockPanel LastChildFill="True">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                        <Button Content="Open" Click="Open_Click" MinWidth="76" Margin="0,0,6,0"/>
+                        <Button Content="Save" Click="Save_Click" MinWidth="76" Margin="0,0,6,0"/>
+                        <Button Content="Save As" Click="SaveAs_Click" MinWidth="86" Margin="0,0,14,0"/>
+                        <Button Content="Validate" Click="Validate_Click" MinWidth="86" Margin="0,0,6,0"/>
+                        <Button Content="Preview" Click="RefreshPreview_Click" MinWidth="86"/>
+                    </StackPanel>
+                    <TextBlock x:Name="StatusText"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="#374151"/>
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="340"/>
+                    <ColumnDefinition Width="5"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="0,0,1,0" Padding="12">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <TextBlock Text="File" FontWeight="SemiBold" Foreground="#111827"/>
+                            <TextBlock x:Name="FilePathText"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap"
+                                       Foreground="#4B5563"/>
+                            <TextBlock x:Name="EncodingText"
+                                       Margin="0,4,0,12"
+                                       Foreground="#6B7280"/>
+                        </StackPanel>
+
+                        <Border Grid.Row="1" BorderBrush="#E5E7EB" BorderThickness="1" Padding="10" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="#RESOLUTION" FontWeight="SemiBold" Foreground="#111827"/>
+                                <UniformGrid Grid.Row="1" Columns="2" Margin="0,8,0,8">
+                                    <StackPanel Margin="0,0,6,0">
+                                        <TextBlock Text="Width" Foreground="#4B5563"/>
+                                        <TextBox x:Name="ResolutionWidthBox" MinHeight="28"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="6,0,0,0">
+                                        <TextBlock Text="Height" Foreground="#4B5563"/>
+                                        <TextBox x:Name="ResolutionHeightBox" MinHeight="28"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <Button Grid.Row="2"
+                                        Content="Apply Resolution"
+                                        Click="ApplyResolution_Click"
+                                        HorizontalAlignment="Stretch"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="2" BorderBrush="#E5E7EB" BorderThickness="1" Padding="10" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Selected Object" FontWeight="SemiBold" Foreground="#111827"/>
+                                <TextBlock x:Name="SelectedObjectText"
+                                           Grid.Row="1"
+                                           Margin="0,4,0,8"
+                                           Foreground="#4B5563"
+                                           TextWrapping="Wrap"/>
+                                <UniformGrid Grid.Row="2" Columns="4">
+                                    <StackPanel Margin="0,0,4,6">
+                                        <TextBlock Text="SX"/>
+                                        <TextBox x:Name="SourceXBox"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="SY"/>
+                                        <TextBox x:Name="SourceYBox"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,6">
+                                        <TextBlock Text="SW"/>
+                                        <TextBox x:Name="SourceWidthBox"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,6">
+                                        <TextBlock Text="SH"/>
+                                        <TextBox x:Name="SourceHeightBox"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <UniformGrid Grid.Row="3" Columns="4">
+                                    <StackPanel Margin="0,0,4,8">
+                                        <TextBlock Text="DX"/>
+                                        <TextBox x:Name="DestXBox"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,8">
+                                        <TextBlock Text="DY"/>
+                                        <TextBox x:Name="DestYBox"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,4,8">
+                                        <TextBlock Text="DW"/>
+                                        <TextBox x:Name="DestWidthBox"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="4,0,0,8">
+                                        <TextBlock Text="DH"/>
+                                        <TextBox x:Name="DestHeightBox"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <Button Grid.Row="4"
+                                        Content="Apply Object Geometry"
+                                        Click="ApplyObject_Click"
+                                        HorizontalAlignment="Stretch"/>
+                            </Grid>
+                        </Border>
+
+                        <DataGrid x:Name="ObjectsGrid"
+                                  Grid.Row="3"
+                                  AutoGenerateColumns="False"
+                                  IsReadOnly="True"
+                                  SelectionMode="Single"
+                                  SelectionChanged="ObjectsGrid_SelectionChanged"
+                                  HeadersVisibility="Column"
+                                  GridLinesVisibility="Horizontal"
+                                  CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="#" Binding="{Binding Id}" Width="42"/>
+                                <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="105"/>
+                                <DataGridTextColumn Header="Line" Binding="{Binding Location}" Width="95"/>
+                                <DataGridTextColumn Header="X" Binding="{Binding DestX}" Width="52"/>
+                                <DataGridTextColumn Header="Y" Binding="{Binding DestY}" Width="52"/>
+                                <DataGridTextColumn Header="W" Binding="{Binding DestWidth}" Width="52"/>
+                                <DataGridTextColumn Header="H" Binding="{Binding DestHeight}" Width="52"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Border>
+
+                <GridSplitter Grid.Column="1"
+                              Width="5"
+                              HorizontalAlignment="Stretch"
+                              Background="#E5E7EB"/>
+
+                <TabControl Grid.Column="2" Margin="10">
+                    <TabItem Header="Code">
+                        <TextBox x:Name="CodeEditor"
+                                 AcceptsReturn="True"
+                                 AcceptsTab="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas"
+                                 FontSize="13"
+                                 TextChanged="CodeEditor_TextChanged"/>
+                    </TabItem>
+                    <TabItem Header="Preview">
+                        <Grid Background="#111827">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Border Grid.Row="0" Background="#1F2937" BorderBrush="#374151" BorderThickness="0,0,0,1" Padding="10,8">
+                                <DockPanel LastChildFill="True">
+                                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                        <TextBlock Text="Time"
+                                                   Foreground="#E5E7EB"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,8,0"/>
+                                        <Slider x:Name="PreviewTimeSlider"
+                                                Width="260"
+                                                Minimum="0"
+                                                Maximum="10000"
+                                                TickFrequency="500"
+                                                IsSnapToTickEnabled="False"
+                                                Value="1000"
+                                                VerticalAlignment="Center"
+                                                ValueChanged="PreviewTimeSlider_ValueChanged"/>
+                                        <TextBox x:Name="PreviewTimeBox"
+                                                 Width="74"
+                                                 Margin="8,0,4,0"
+                                                 Text="1000"
+                                                 LostFocus="PreviewTimeBox_LostFocus"/>
+                                        <TextBlock Text="ms"
+                                                   Foreground="#D1D5DB"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,10,0"/>
+                                        <ComboBox x:Name="PreviewModeBox"
+                                                  Width="112"
+                                                  SelectedIndex="0"
+                                                  SelectionChanged="PreviewModeBox_SelectionChanged"
+                                                  Margin="0,0,8,0">
+                                            <ComboBoxItem Content="Playing" Tag="playing"/>
+                                            <ComboBoxItem Content="Ready" Tag="ready"/>
+                                            <ComboBoxItem Content="Scene" Tag="scene"/>
+                                            <ComboBoxItem Content="All timers" Tag="all"/>
+                                        </ComboBox>
+                                        <Button Content="Refresh"
+                                                Click="RefreshPreview_Click"
+                                                MinWidth="82"/>
+                                    </StackPanel>
+                                    <TextBlock Text="LR2-style simulated frame"
+                                               Foreground="#9CA3AF"
+                                               VerticalAlignment="Center"
+                                               TextAlignment="Right"/>
+                                </DockPanel>
+                            </Border>
+                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                <Canvas x:Name="PreviewCanvas" Background="#0B1020"/>
+                            </ScrollViewer>
+                            <TextBlock x:Name="PreviewOverlay"
+                                       Grid.Row="1"
+                                       VerticalAlignment="Top"
+                                       HorizontalAlignment="Left"
+                                       Margin="12"
+                                       Foreground="#E5E7EB"
+                                       Background="#99000000"
+                                       Padding="8,4"/>
+                        </Grid>
+                    </TabItem>
+                    <TabItem Header="Diagnostics">
+                        <TextBox x:Name="DiagnosticsBox"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas"
+                                 FontSize="13"/>
+                    </TabItem>
+                </TabControl>
+            </Grid>
+
+            <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="0,1,0,0" Padding="10,6">
+                <TextBlock x:Name="FooterText" Foreground="#4B5563"/>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

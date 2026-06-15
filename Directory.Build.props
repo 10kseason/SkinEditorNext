@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory).build\obj\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory).build\bin\</BaseOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildThisFileDirectory).build\**;$(MSBuildThisFileDirectory)lib\**;$(MSBuildThisFileDirectory)LR2\**;$(MSBuildThisFileDirectory)LR2files\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>
