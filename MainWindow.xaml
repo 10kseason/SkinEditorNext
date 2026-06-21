@@ -106,6 +106,8 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="112"/>
+                                    <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
                                 <DockPanel Grid.Row="0">
@@ -117,8 +119,33 @@
                                 <ComboBox x:Name="ImageAssetBox"
                                           Grid.Row="1"
                                           DisplayMemberPath="DisplayName"
+                                          SelectionChanged="ImageAssetBox_SelectionChanged"
                                           Margin="0,8,0,8"/>
-                                <Button Grid.Row="2"
+                                <Border Grid.Row="2"
+                                        Background="#F9FAFB"
+                                        BorderBrush="#E5E7EB"
+                                        BorderThickness="1"
+                                        Margin="0,0,0,6">
+                                    <Grid>
+                                        <Image x:Name="AssetPreviewImage"
+                                               Stretch="Uniform"
+                                               SnapsToDevicePixels="True"
+                                               RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                                        <TextBlock x:Name="AssetPreviewLabel"
+                                                   Text="No asset selected"
+                                                   Foreground="#6B7280"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="12"/>
+                                    </Grid>
+                                </Border>
+                                <TextBlock x:Name="AssetPreviewInfoText"
+                                           Grid.Row="3"
+                                           Margin="0,0,0,8"
+                                           Foreground="#4B5563"
+                                           TextWrapping="Wrap"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <Button Grid.Row="4"
                                         Content="Add Image..."
                                         Click="AddImage_Click"
                                         HorizontalAlignment="Stretch"/>
@@ -403,7 +430,8 @@
                                     <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="130"/>
                                     <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="62"/>
                                     <DataGridTextColumn Header="Group" Binding="{Binding Group}" Width="120"/>
-                                    <DataGridTextColumn Header="Command" Binding="{Binding Command}" Width="160"/>
+                                    <DataGridTextColumn Header="Command" Binding="{Binding Command}" Width="150"/>
+                                    <DataGridTextColumn Header="Position" Binding="{Binding Position}" Width="150"/>
                                     <DataGridTextColumn Header="Fields" Binding="{Binding Arguments}" Width="2*"/>
                                     <DataGridTextColumn Header="CSV" Binding="{Binding RawLine}" Width="2*"/>
                                 </DataGrid.Columns>

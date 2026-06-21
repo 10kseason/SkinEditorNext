@@ -227,12 +227,78 @@ public partial class MainWindow : Window
             _bitmapFactory.Clear();
             RefreshDocumentFromEditor();
             ImageAssetBox.SelectedItem = _document?.ImageSlots.LastOrDefault();
+            UpdateAssetPreview();
             RenderPreview();
             SetStatus($"Added {lines.Count} image asset(s).");
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Add image failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ImageAssetBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateAssetPreview();
+    }
+
+    private void UpdateAssetPreview()
+    {
+        if (AssetPreviewImage is null || AssetPreviewLabel is null || AssetPreviewInfoText is null) return;
+
+        AssetPreviewImage.Source = null;
+        AssetPreviewLabel.Visibility = Visibility.Visible;
+
+        if (_document is null)
+        {
+            AssetPreviewLabel.Text = "Open a skin first";
+            AssetPreviewInfoText.Text = string.Empty;
+            return;
+        }
+
+        if (ImageAssetBox.SelectedItem is not SkinImageSlot slot)
+        {
+            AssetPreviewLabel.Text = "No asset selected";
+            AssetPreviewInfoText.Text = _document.ImageSlots.Count == 0 ? "No #IMAGE rows in current skin." : string.Empty;
+            return;
+        }
+
+        var info = new StringBuilder();
+        info.Append($"#{slot.Index} {IOPath.GetFileName(slot.RawPath.Length > 0 ? slot.RawPath : slot.ResolvedPath)}");
+        if (Lr2ImageProbe.TryGetSize(slot.ResolvedPath, out var width, out var height))
+        {
+            info.Append($" / {width}x{height}");
+        }
+
+        info.AppendLine();
+        info.AppendLine($"line: {IOPath.GetFileName(slot.SourceFile)}:{slot.SourceLine}");
+        info.Append($"path: {slot.RawPath}");
+        AssetPreviewInfoText.Text = info.ToString();
+
+        if (_bitmapFactory.TryLoadImage(slot.ResolvedPath, out var bitmap))
+        {
+            AssetPreviewImage.Source = bitmap;
+            AssetPreviewLabel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        AssetPreviewLabel.Text = "Image unavailable";
+    }
+
+    private void SelectImageAssetForObject(SkinObjectView item)
+    {
+        if (_document is null || item.SourceGraph < 0) return;
+
+        var slot = _document.ImageSlots.FirstOrDefault(candidate => candidate.Index == item.SourceGraph);
+        if (slot is null) return;
+
+        if (!ReferenceEquals(ImageAssetBox.SelectedItem, slot))
+        {
+            ImageAssetBox.SelectedItem = slot;
+        }
+        else
+        {
+            UpdateAssetPreview();
         }
     }
 
@@ -304,6 +370,7 @@ public partial class MainWindow : Window
         }
 
         SelectedObjectText.Text = $"{item.Kind} at {item.Location}" + (item.IsEditableInMain ? string.Empty : " (include)");
+        SelectImageAssetForObject(item);
         SourceXBox.Text = item.SourceX.ToString(CultureInfo.InvariantCulture);
         SourceYBox.Text = item.SourceY.ToString(CultureInfo.InvariantCulture);
         SourceWidthBox.Text = item.SourceWidth.ToString(CultureInfo.InvariantCulture);
@@ -448,6 +515,7 @@ public partial class MainWindow : Window
         {
             ImageAssetBox.SelectedIndex = 0;
         }
+        UpdateAssetPreview();
 
         ObjectsGrid.ItemsSource = null;
         ObjectsGrid.ItemsSource = _document.Objects;
@@ -1287,7 +1355,7 @@ public partial class MainWindow : Window
 
                 var command = fields[0].Trim();
                 var arguments = string.Join(", ", fields.Skip(1).Select(field => field.Trim()));
-                var entry = new SkinHelpEntry("Helper", string.Empty, ReadSkinHelpGroup(command), command, arguments, rawLine, isTemplate: true, rawLine);
+                var entry = new SkinHelpEntry("Helper", string.Empty, ReadSkinHelpGroup(command), command, string.Empty, arguments, rawLine, isTemplate: true, rawLine);
                 _skinHelpTemplates.Add(entry);
                 _skinHelpTemplatesByCommand[command] = entry;
             }
@@ -1323,12 +1391,14 @@ public partial class MainWindow : Window
             }
 
             var arguments = FormatSkinHelpArguments(line, template);
-            var detail = FormatSkinHelpDetail(line, template, arguments);
+            var position = FormatSkinHelpPosition(line);
+            var detail = FormatSkinHelpDetail(line, template, arguments, position);
             _skinHelpRows.Add(new SkinHelpEntry(
                 source,
                 line.SourceLine.ToString(CultureInfo.InvariantCulture),
                 ReadSkinHelpGroup(line.Command),
                 line.Command,
+                position,
                 arguments,
                 line.RawText.Trim(),
                 isTemplate: false,
@@ -1354,6 +1424,7 @@ public partial class MainWindow : Window
                     entry.Line.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                     entry.Group.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                     entry.Command.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Position.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                     entry.Arguments.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                     entry.RawLine.Contains(query, StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -1431,6 +1502,35 @@ public partial class MainWindow : Window
             : "current";
     }
 
+    private static string FormatSkinHelpPosition(SkinCommandLine line)
+    {
+        var command = line.Command;
+        if (line.Fields.Count <= 0) return string.Empty;
+
+        if (command.StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase) ||
+            command.StartsWith("#DST_", StringComparison.OrdinalIgnoreCase))
+        {
+            return FormatCsvRect(line.Fields, xIndex: 3, yIndex: 4, widthIndex: 5, heightIndex: 6);
+        }
+
+        if (command.Equals("#RESOLUTION", StringComparison.OrdinalIgnoreCase) && line.Fields.Count >= 3)
+        {
+            return $"w={ReadCsvField(line.Fields, 1)}, h={ReadCsvField(line.Fields, 2)}";
+        }
+
+        return string.Empty;
+    }
+
+    private static string FormatCsvRect(IReadOnlyList<string> fields, int xIndex, int yIndex, int widthIndex, int heightIndex)
+    {
+        if (fields.Count <= heightIndex) return string.Empty;
+        return $"x={ReadCsvField(fields, xIndex)}, y={ReadCsvField(fields, yIndex)}, w={ReadCsvField(fields, widthIndex)}, h={ReadCsvField(fields, heightIndex)}";
+    }
+
+    private static string ReadCsvField(IReadOnlyList<string> fields, int index)
+    {
+        return index >= 0 && index < fields.Count ? fields[index].Trim() : string.Empty;
+    }
     private static string FormatSkinHelpArguments(SkinCommandLine line, SkinHelpEntry? template)
     {
         if (line.Fields.Count <= 1) return string.Empty;
@@ -1445,11 +1545,15 @@ public partial class MainWindow : Window
         return string.Join(", ", parts);
     }
 
-    private static string FormatSkinHelpDetail(SkinCommandLine line, SkinHelpEntry? template, string arguments)
+    private static string FormatSkinHelpDetail(SkinCommandLine line, SkinHelpEntry? template, string arguments, string position)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"{line.SourcePath}:{line.SourceLine}");
         builder.AppendLine(line.RawText.Trim());
+        if (!string.IsNullOrWhiteSpace(position))
+        {
+            builder.AppendLine($"CSV position: {position}");
+        }
         builder.AppendLine();
 
         if (line.Fields.Count <= 1)
@@ -1523,6 +1627,7 @@ public partial class MainWindow : Window
         ObjectsGrid.ItemsSource = null;
         ImageAssetBox.ItemsSource = null;
         AssetsSummaryText.Text = "0 image(s)";
+        UpdateAssetPreview();
         _skinHelpRows.Clear();
         ApplySkinHelpFilter();
         ResolutionWidthBox.Text = "640";

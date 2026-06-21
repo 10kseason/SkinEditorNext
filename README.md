@@ -53,3 +53,5 @@ Zip the output folder for distribution.
 - Unsupported image resources are shown as placeholders in preview.
 - Object creation UI is still intentionally basic; advanced command authoring
   may require raw text editing.
+
+[ GOMazk](https://github.com/GOMazk) 님의 소스코드에서 파생된 프로젝트입니다

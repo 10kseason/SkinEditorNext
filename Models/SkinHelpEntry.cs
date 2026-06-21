@@ -7,6 +7,7 @@ public sealed class SkinHelpEntry
         string line,
         string group,
         string command,
+        string position,
         string arguments,
         string rawLine,
         bool isTemplate,
@@ -16,6 +17,7 @@ public sealed class SkinHelpEntry
         Line = line;
         Group = group;
         Command = command;
+        Position = position;
         Arguments = arguments;
         RawLine = rawLine;
         IsTemplate = isTemplate;
@@ -29,6 +31,8 @@ public sealed class SkinHelpEntry
     public string Group { get; }
 
     public string Command { get; }
+
+    public string Position { get; }
 
     public string Arguments { get; }
 

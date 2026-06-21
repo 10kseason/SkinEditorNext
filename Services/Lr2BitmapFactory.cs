@@ -57,6 +57,16 @@ public sealed class Lr2BitmapFactory
         return true;
     }
 
+    public bool TryLoadImage(string path, out BitmapSource bitmap)
+    {
+        bitmap = null!;
+        var source = TryLoadBitmap(path);
+        if (source is null) return false;
+
+        bitmap = source;
+        return true;
+    }
+
     private BitmapSource? TryLoadBitmap(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Contains('*') || path.Equals("CONTINUE", StringComparison.OrdinalIgnoreCase))
