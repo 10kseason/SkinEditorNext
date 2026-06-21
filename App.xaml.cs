@@ -152,7 +152,7 @@ public partial class App : Application
         {
             var fullImagePath = Path.GetFullPath(imagePath);
             var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? Environment.CurrentDirectory;
-            var relativeImagePath = Path.GetRelativePath(directory, fullImagePath);
+            var relativeImagePath = Lr2SkinWriter.ToLr2LoadPath(fullImagePath, directory);
             var text = Lr2SkinWriter.CreateNewSkin(Lr2SkinWriter.DefaultSettings);
 
             if (!Lr2ImageProbe.TryGetSize(fullImagePath, out var width, out var height))

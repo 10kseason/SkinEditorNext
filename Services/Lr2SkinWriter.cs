@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text;
 
 namespace SkinEditorNext.Services;
@@ -192,6 +193,39 @@ public sealed class Lr2SkinWriter
         ]);
     }
 
+    public static string ToLr2LoadPath(string fullPath, string fallbackBaseDirectory)
+    {
+        var normalizedFullPath = Path.GetFullPath(fullPath);
+        var fullDirectory = Directory.Exists(normalizedFullPath)
+            ? normalizedFullPath
+            : Path.GetDirectoryName(normalizedFullPath);
+
+        var directory = string.IsNullOrWhiteSpace(fullDirectory)
+            ? new DirectoryInfo(Path.GetFullPath(fallbackBaseDirectory))
+            : new DirectoryInfo(fullDirectory);
+
+        while (directory is not null)
+        {
+            var lr2FilesRoot = Path.Combine(directory.FullName, "LR2files");
+            if (IsSameOrChildPath(normalizedFullPath, lr2FilesRoot))
+            {
+                return NormalizePath(Path.GetRelativePath(directory.FullName, normalizedFullPath));
+            }
+
+            directory = directory.Parent;
+        }
+
+        return NormalizePath(Path.GetRelativePath(fallbackBaseDirectory, normalizedFullPath));
+    }
+
+    private static bool IsSameOrChildPath(string path, string root)
+    {
+        var normalizedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return normalizedPath.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase) ||
+               normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+               normalizedPath.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
     private static string NormalizePath(string path)
     {
         return path.Replace('/', '\\').Trim();

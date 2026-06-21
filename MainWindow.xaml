@@ -6,7 +6,8 @@
         Width="1320"
         MinHeight="680"
         MinWidth="1060"
-        Background="#F3F4F6">
+        Background="#F3F4F6"
+        PreviewKeyDown="Window_PreviewKeyDown">
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
@@ -345,7 +346,84 @@
                                  FontSize="13"
                                  TextChanged="CodeEditor_TextChanged"/>
                     </TabItem>
-                    <TabItem Header="Preview">
+                    <TabItem Header="Help">
+                        <Grid Background="#FFFFFF">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1" Padding="10,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBox x:Name="SkinHelpSearchBox"
+                                                 MinHeight="28"
+                                                 TextChanged="SkinHelpSearchBox_TextChanged"/>
+                                        <TextBlock x:Name="SkinHelpPathText"
+                                                   Margin="0,4,0,0"
+                                                   Foreground="#6B7280"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0">
+                                        <ComboBox x:Name="SkinHelpModeBox"
+                                                  Width="128"
+                                                  SelectedIndex="0"
+                                                  SelectionChanged="SkinHelpModeBox_SelectionChanged"
+                                                  Margin="0,0,8,0">
+                                            <ComboBoxItem Content="Current Skin" Tag="current"/>
+                                            <ComboBoxItem Content="Templates" Tag="templates"/>
+                                        </ComboBox>
+                                        <Button Content="Insert Template"
+                                                Click="InsertSkinHelp_Click"
+                                                MinWidth="108"
+                                                Margin="0,0,8,0"/>
+                                        <TextBlock x:Name="SkinHelpSummaryText"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="#4B5563"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <DataGrid x:Name="SkinHelpGrid"
+                                      Grid.Row="1"
+                                      AutoGenerateColumns="False"
+                                      IsReadOnly="True"
+                                      SelectionMode="Single"
+                                      HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal"
+                                      CanUserAddRows="False"
+                                      SelectionChanged="SkinHelpGrid_SelectionChanged"
+                                      MouseDoubleClick="SkinHelpGrid_MouseDoubleClick">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="130"/>
+                                    <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="62"/>
+                                    <DataGridTextColumn Header="Group" Binding="{Binding Group}" Width="120"/>
+                                    <DataGridTextColumn Header="Command" Binding="{Binding Command}" Width="160"/>
+                                    <DataGridTextColumn Header="Fields" Binding="{Binding Arguments}" Width="2*"/>
+                                    <DataGridTextColumn Header="CSV" Binding="{Binding RawLine}" Width="2*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <TextBox x:Name="SkinHelpDetailBox"
+                                     Grid.Row="2"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     MinHeight="72"
+                                     MaxHeight="140"
+                                     BorderBrush="#E5E7EB"
+                                     BorderThickness="0,1,0,0"
+                                     FontFamily="Consolas"
+                                     FontSize="13"/>
+                        </Grid>
+                    </TabItem>
+                    <TabItem x:Name="PreviewTab" Header="Preview">
                         <Grid Background="#111827">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -396,17 +474,81 @@
                                                TextAlignment="Right"/>
                                 </DockPanel>
                             </Border>
-                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                                <Canvas x:Name="PreviewCanvas" Background="#0B1020"/>
-                            </ScrollViewer>
-                            <TextBlock x:Name="PreviewOverlay"
-                                       Grid.Row="1"
-                                       VerticalAlignment="Top"
-                                       HorizontalAlignment="Left"
-                                       Margin="12"
-                                       Foreground="#E5E7EB"
-                                       Background="#99000000"
-                                       Padding="8,4"/>
+                            <Grid Grid.Row="1">
+                                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                    <Canvas x:Name="PreviewCanvas"
+                                            Background="#0B1020"
+                                            Focusable="True"
+                                            MouseLeftButtonDown="PreviewCanvas_MouseLeftButtonDown"
+                                            MouseMove="PreviewCanvas_MouseMove"
+                                            MouseLeftButtonUp="PreviewCanvas_MouseLeftButtonUp"
+                                            KeyDown="PreviewCanvas_KeyDown"/>
+                                </ScrollViewer>
+                                <TextBlock x:Name="PreviewOverlay"
+                                           VerticalAlignment="Top"
+                                           HorizontalAlignment="Left"
+                                           Margin="12"
+                                           Foreground="#E5E7EB"
+                                           Background="#99000000"
+                                           Padding="8,4"
+                                           Focusable="False"
+                                           IsHitTestVisible="False"/>
+                                <Border x:Name="PreviewSelectionPanel"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Stretch"
+                                        Width="340"
+                                        Margin="0,12,12,12"
+                                        Background="#DD111827"
+                                        BorderBrush="#4B5563"
+                                        BorderThickness="1"
+                                        Padding="10"
+                                        Focusable="False"
+                                        IsHitTestVisible="False">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="104"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Selection"
+                                                   Foreground="#F9FAFB"
+                                                   FontWeight="SemiBold"
+                                                   Margin="0,0,0,8"/>
+                                        <Border Grid.Row="1"
+                                                Background="#66111827"
+                                                BorderBrush="#374151"
+                                                BorderThickness="1"
+                                                Margin="0,0,0,8">
+                                            <Grid>
+                                                <Image x:Name="PreviewSelectionImage"
+                                                       Stretch="Uniform"
+                                                       SnapsToDevicePixels="True"
+                                                       RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                                                <TextBlock x:Name="PreviewSelectionImageLabel"
+                                                           Text="No image selected"
+                                                           Foreground="#9CA3AF"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="12"/>
+                                            </Grid>
+                                        </Border>
+                                        <TextBox x:Name="PreviewSelectionBox"
+                                                 Grid.Row="2"
+                                                 IsReadOnly="True"
+                                                 Focusable="False"
+                                                 IsHitTestVisible="False"
+                                                 AcceptsReturn="True"
+                                                 TextWrapping="Wrap"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 HorizontalScrollBarVisibility="Auto"
+                                                 Background="#00111827"
+                                                 BorderBrush="#374151"
+                                                 Foreground="#E5E7EB"
+                                                 FontFamily="Consolas"
+                                                 FontSize="12"/>
+                                    </Grid>
+                                </Border>
+                            </Grid>
                         </Grid>
                     </TabItem>
                     <TabItem Header="Diagnostics">

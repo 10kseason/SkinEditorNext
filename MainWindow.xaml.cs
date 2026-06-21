@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
@@ -18,14 +19,29 @@ public partial class MainWindow : Window
     private readonly Lr2SkinParser _parser = new();
     private readonly Lr2PreviewEvaluator _previewEvaluator = new();
     private readonly Lr2BitmapFactory _bitmapFactory = new();
+    private readonly List<SkinHelpEntry> _skinHelpTemplates = new();
+    private readonly Dictionary<string, SkinHelpEntry> _skinHelpTemplatesByCommand = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _skinHelpGroupByCommand = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<SkinHelpEntry> _skinHelpRows = new();
+    private readonly List<Lr2PreviewItem> _previewItems = new();
     private Lr2SkinDocument? _document;
     private bool _loadingEditor;
     private bool _syncingPreviewTime;
     private bool _dirty;
+    private int? _selectedPreviewObjectId;
+    private Lr2PreviewItem? _selectedPreviewItem;
+    private bool _previewEditMode;
+    private bool _draggingPreviewObject;
+    private Point _previewDragStartPoint;
+    private int _previewDragStartX;
+    private int _previewDragStartY;
+    private int _previewDragLastDx;
+    private int _previewDragLastDy;
 
     public MainWindow()
     {
         InitializeComponent();
+        LoadSkinHelp();
         SetEmptyState();
     }
 
@@ -55,6 +71,7 @@ public partial class MainWindow : Window
             _bitmapFactory.Clear();
             _document = _parser.ParseMainText(saveDialog.FileName, text, encoding);
             SetEditorText(text, markDirty: false);
+            SelectCurrentSkinHelpMode();
             UpdateDocumentViews();
             RenderPreview();
             SetStatus($"Created {IOPath.GetFileName(saveDialog.FileName)}.");
@@ -136,11 +153,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!item.IsEditableInMain)
-        {
-            SetStatus("Selected object is from an include file; edit that include in code mode or open it directly.");
-            return;
-        }
 
         if (!TryReadInt(SourceXBox, "source x", out var sx) ||
             !TryReadInt(SourceYBox, "source y", out var sy) ||
@@ -163,10 +175,14 @@ public partial class MainWindow : Window
         item.DestWidth = dw;
         item.DestHeight = dh;
 
-        SetEditorText(Lr2SkinParser.UpdateObjectGeometry(CodeEditor.Text, item), markDirty: true);
+        if (!ApplyPreviewObjectGeometry(item))
+        {
+            return;
+        }
+
         RefreshDocumentFromEditor(item.Id);
         RenderPreview();
-        SetStatus($"Applied object geometry for #{item.Id}.");
+        SetStatus($"Applied object geometry for #{item.Id} ({(item.IsEditableInMain ? "main" : "include")}).");
     }
 
     private void AddImage_Click(object sender, RoutedEventArgs e)
@@ -185,7 +201,8 @@ public partial class MainWindow : Window
         var lines = new List<string>();
         try
         {
-            // New assets are copied next to the skin so exported .lr2skin files stay portable.
+            // LR2 loads #IMAGE paths from its process/root path in practice. Store copied assets
+            // under the skin folder, but emit LR2files\... paths when the skin lives inside LR2files.
             // Existing names are never overwritten; GetUniqueAssetPath adds _1, _2, ...
             var assetDirectory = IOPath.Combine(directory, "assets");
             Directory.CreateDirectory(assetDirectory);
@@ -201,7 +218,7 @@ public partial class MainWindow : Window
 
                 var destinationPath = GetUniqueAssetPath(assetDirectory, IOPath.GetFileName(sourcePath));
                 File.Copy(sourcePath, destinationPath, overwrite: false);
-                var relativePath = IOPath.GetRelativePath(directory, destinationPath);
+                var relativePath = Lr2SkinWriter.ToLr2LoadPath(destinationPath, directory);
                 lines.Add(Lr2SkinWriter.ImageLine(relativePath));
             }
 
@@ -334,6 +351,31 @@ public partial class MainWindow : Window
         UpdateTitle();
     }
 
+    private void SkinHelpSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplySkinHelpFilter();
+    }
+
+    private void SkinHelpModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ApplySkinHelpFilter();
+    }
+
+    private void SkinHelpGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        SkinHelpDetailBox.Text = SkinHelpGrid.SelectedItem is SkinHelpEntry entry ? entry.Detail : string.Empty;
+    }
+
+    private void SkinHelpGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        InsertSelectedSkinHelpLine();
+    }
+
+    private void InsertSkinHelp_Click(object sender, RoutedEventArgs e)
+    {
+        InsertSelectedSkinHelpLine();
+    }
+
     private void OpenDocument(string path)
     {
         try
@@ -341,6 +383,7 @@ public partial class MainWindow : Window
             _bitmapFactory.Clear();
             _document = _parser.Load(path);
             SetEditorText(_document.MainText, markDirty: false);
+            SelectCurrentSkinHelpMode();
             UpdateDocumentViews();
             RenderPreview();
             SetStatus($"Opened {IOPath.GetFileName(path)}.");
@@ -415,6 +458,7 @@ public partial class MainWindow : Window
         }
 
         FooterText.Text = $"{_document.Lines.Count:N0} parsed lines, {_document.Objects.Count:N0} objects, resolution {_document.Resolution}";
+        RefreshSkinHelpRows();
         UpdateTitle();
     }
 
@@ -430,27 +474,38 @@ public partial class MainWindow : Window
     private void RenderPreview()
     {
         PreviewCanvas.Children.Clear();
+        _previewItems.Clear();
+        _selectedPreviewItem = null;
 
         if (_document is null)
         {
             PreviewCanvas.Width = 640;
             PreviewCanvas.Height = 480;
             PreviewOverlay.Text = "Open a .lr2skin file.";
+            ClearPreviewDrag();
+            UpdatePreviewSelectionPanel();
             return;
         }
 
         var resolution = _document.Resolution.IsValid ? _document.Resolution : ResolutionInfo.Default;
         var clock = ReadPreviewClock();
         var renderItems = _previewEvaluator.Evaluate(_document, clock, maxItems: 3000);
+        _previewItems.AddRange(renderItems);
+        if (_selectedPreviewObjectId is not null)
+        {
+            _selectedPreviewItem = _previewItems.LastOrDefault(item => item.Object.Id == _selectedPreviewObjectId.Value);
+        }
+
         PreviewCanvas.Width = resolution.Width;
         PreviewCanvas.Height = resolution.Height;
-        PreviewOverlay.Text = $"{resolution.Width} x {resolution.Height} / {renderItems.Count:N0} visible / {_document.Objects.Count:N0} objects / {(int)clock.TimeMs} ms / {clock.ModeName}";
+        PreviewOverlay.Text = $"{resolution.Width} x {resolution.Height} / {renderItems.Count:N0} visible / {_document.Objects.Count:N0} objects / {(int)clock.TimeMs} ms / {clock.ModeName} / {ReadPreviewEditModeLabel()}";
 
         PreviewCanvas.Children.Add(new Rectangle
         {
             Width = resolution.Width,
             Height = resolution.Height,
-            Fill = new SolidColorBrush(Color.FromRgb(17, 24, 39))
+            Fill = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
+            IsHitTestVisible = false
         });
 
         foreach (var item in renderItems)
@@ -463,8 +518,16 @@ public partial class MainWindow : Window
             Width = resolution.Width,
             Height = resolution.Height,
             Stroke = new SolidColorBrush(Color.FromRgb(229, 231, 235)),
-            StrokeThickness = 1
+            StrokeThickness = 1,
+            IsHitTestVisible = false
         });
+
+        if (_selectedPreviewItem is not null)
+        {
+            AddPreviewSelectionAdorner(_selectedPreviewItem);
+        }
+
+        UpdatePreviewSelectionPanel();
     }
 
     private void AddPreviewObject(Lr2PreviewItem item)
@@ -544,6 +607,426 @@ public partial class MainWindow : Window
         Canvas.SetLeft(border, dest.X);
         Canvas.SetTop(border, dest.Y);
         PreviewCanvas.Children.Add(border);
+    }
+
+    private void PreviewCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_document is null) return;
+
+        PreviewCanvas.Focus();
+        var point = e.GetPosition(PreviewCanvas);
+        var item = FindPreviewItemAt(point);
+        if (item is null)
+        {
+            ClearPreviewDrag();
+            _selectedPreviewObjectId = null;
+            _selectedPreviewItem = null;
+            RenderPreview();
+            SetStatus($"No preview object at {FormatDouble(point.X)},{FormatDouble(point.Y)}.");
+            return;
+        }
+
+        _selectedPreviewObjectId = item.Object.Id;
+        _selectedPreviewItem = item;
+        ObjectsGrid.SelectedItem = _document.Objects.FirstOrDefault(candidate => candidate.Id == item.Object.Id);
+        BeginPreviewDrag(item, point);
+        RenderPreview();
+        SetStatus($"Selected preview object #{item.Object.Id} {item.Object.Kind} at {FormatPreviewRect(item.Destination)}.");
+        e.Handled = true;
+    }
+
+    private void PreviewCanvas_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_draggingPreviewObject || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(PreviewCanvas);
+        var dx = (int)Math.Round(point.X - _previewDragStartPoint.X);
+        var dy = (int)Math.Round(point.Y - _previewDragStartPoint.Y);
+        if (dx == _previewDragLastDx && dy == _previewDragLastDy)
+        {
+            return;
+        }
+
+        _previewDragLastDx = dx;
+        _previewDragLastDy = dy;
+        if (MoveSelectedPreviewObjectTo(_previewDragStartX + dx, _previewDragStartY + dy))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void PreviewCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_draggingPreviewObject) return;
+        ClearPreviewDrag();
+        e.Handled = true;
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.L || !PreviewTab.IsSelected)
+        {
+            return;
+        }
+
+        TogglePreviewEditMode();
+        PreviewCanvas.Focus();
+        e.Handled = true;
+    }
+    private void PreviewCanvas_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.L)
+        {
+            TogglePreviewEditMode();
+            e.Handled = true;
+            return;
+        }
+
+        var dx = 0;
+        var dy = 0;
+        switch (e.Key)
+        {
+            case Key.Left:
+                dx = -1;
+                break;
+            case Key.Right:
+                dx = 1;
+                break;
+            case Key.Up:
+                dy = -1;
+                break;
+            case Key.Down:
+                dy = 1;
+                break;
+            default:
+                return;
+        }
+
+        if (!_previewEditMode)
+        {
+            SetStatus("Preview is read-only. Press L to enable edit mode.");
+            e.Handled = true;
+            return;
+        }
+
+        if (MoveSelectedPreviewObjectBy(dx, dy))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void TogglePreviewEditMode()
+    {
+        _previewEditMode = !_previewEditMode;
+        ClearPreviewDrag();
+        UpdatePreviewSelectionPanel();
+        SetStatus(_previewEditMode
+            ? "Preview edit mode enabled. Drag or use arrow keys to move by 1px. Press L for read-only."
+            : "Preview read-only mode enabled. Press L for edit mode.");
+    }
+    private void BeginPreviewDrag(Lr2PreviewItem item, Point point)
+    {
+        ClearPreviewDrag();
+        if (!_previewEditMode)
+        {
+            SetStatus("Preview is read-only. Press L to enable edit mode.");
+            return;
+        }
+
+
+        _draggingPreviewObject = true;
+        _previewDragStartPoint = point;
+        _previewDragStartX = item.Object.DestX;
+        _previewDragStartY = item.Object.DestY;
+        _previewDragLastDx = 0;
+        _previewDragLastDy = 0;
+        PreviewCanvas.CaptureMouse();
+    }
+
+    private void ClearPreviewDrag()
+    {
+        _draggingPreviewObject = false;
+        _previewDragLastDx = 0;
+        _previewDragLastDy = 0;
+        if (PreviewCanvas.IsMouseCaptured)
+        {
+            PreviewCanvas.ReleaseMouseCapture();
+        }
+    }
+
+    private bool MoveSelectedPreviewObjectBy(int dx, int dy)
+    {
+        if (_document is null || _selectedPreviewObjectId is null)
+        {
+            SetStatus("Select a preview object first.");
+            return false;
+        }
+
+        var item = _document.Objects.FirstOrDefault(candidate => candidate.Id == _selectedPreviewObjectId.Value);
+        if (item is null)
+        {
+            SetStatus("Selected preview object is no longer available.");
+            return false;
+        }
+
+        return MoveSelectedPreviewObjectTo(item.DestX + dx, item.DestY + dy);
+    }
+
+    private bool MoveSelectedPreviewObjectTo(int x, int y)
+    {
+        if (_document is null || _selectedPreviewObjectId is null)
+        {
+            SetStatus("Select a preview object first.");
+            return false;
+        }
+
+        var item = _document.Objects.FirstOrDefault(candidate => candidate.Id == _selectedPreviewObjectId.Value);
+        if (item is null)
+        {
+            SetStatus("Selected preview object is no longer available.");
+            return false;
+        }
+
+        if (!_previewEditMode)
+        {
+            SetStatus("Preview is read-only. Press L to enable edit mode.");
+            return false;
+        }
+
+
+        if (item.DestX == x && item.DestY == y)
+        {
+            return true;
+        }
+
+        item.DestX = x;
+        item.DestY = y;
+        _selectedPreviewObjectId = item.Id;
+        if (!ApplyPreviewObjectGeometry(item))
+        {
+            return false;
+        }
+
+        RefreshDocumentFromEditor(item.Id);
+        ObjectsGrid.SelectedItem = _document?.Objects.FirstOrDefault(candidate => candidate.Id == item.Id);
+        RenderPreview();
+        SetStatus($"Moved preview object #{item.Id} to x={x}, y={y} ({(item.IsEditableInMain ? "main" : "include")}).");
+        return true;
+    }
+
+    private bool ApplyPreviewObjectGeometry(SkinObjectView item)
+    {
+        if (item.IsEditableInMain)
+        {
+            SetEditorText(Lr2SkinParser.UpdateObjectGeometry(CodeEditor.Text, item), markDirty: true);
+            return true;
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(item.SourceFile) || !File.Exists(item.SourceFile))
+            {
+                SetStatus($"Include file not found: {item.SourceFile}");
+                return false;
+            }
+
+            var bytes = File.ReadAllBytes(item.SourceFile);
+            var encoding = Lr2SkinParser.DetectEncoding(bytes);
+            var includeText = encoding.GetString(bytes);
+            var updatedText = Lr2SkinParser.UpdateObjectGeometry(includeText, item);
+            File.WriteAllText(item.SourceFile, updatedText, encoding);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Include edit failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
+    private Lr2PreviewItem? FindPreviewItemAt(Point point)
+    {
+        for (var i = _previewItems.Count - 1; i >= 0; i--)
+        {
+            var item = _previewItems[i];
+            var dest = item.Destination;
+            if (point.X >= dest.X && point.X <= dest.X + dest.Width &&
+                point.Y >= dest.Y && point.Y <= dest.Y + dest.Height)
+            {
+                return item;
+            }
+        }
+
+        return null;
+    }
+
+    private void AddPreviewSelectionAdorner(Lr2PreviewItem item)
+    {
+        var dest = item.Destination;
+        var outline = new Rectangle
+        {
+            Width = dest.Width,
+            Height = dest.Height,
+            Stroke = new SolidColorBrush(Color.FromRgb(34, 211, 238)),
+            StrokeThickness = 2,
+            StrokeDashArray = new DoubleCollection { 6, 3 },
+            Fill = Brushes.Transparent,
+            IsHitTestVisible = false
+        };
+
+        ApplyRotation(outline, item.Angle, item.Center);
+        Canvas.SetLeft(outline, dest.X);
+        Canvas.SetTop(outline, dest.Y);
+        PreviewCanvas.Children.Add(outline);
+    }
+
+    private void UpdatePreviewSelectionPanel()
+    {
+        if (PreviewSelectionBox is null) return;
+
+        if (_document is null)
+        {
+            UpdatePreviewSelectionThumbnail(null, null);
+            PreviewSelectionBox.Text = $"Mode: {ReadPreviewEditModeLabel()}\r\nOpen a .lr2skin file.";
+            return;
+        }
+
+        if (_selectedPreviewObjectId is null)
+        {
+            UpdatePreviewSelectionThumbnail(null, null);
+            PreviewSelectionBox.Text = $"Mode: {ReadPreviewEditModeLabel()}\r\nNo preview object selected.";
+            return;
+        }
+
+        var skinObject = _document.Objects.FirstOrDefault(item => item.Id == _selectedPreviewObjectId.Value);
+        if (skinObject is null)
+        {
+            UpdatePreviewSelectionThumbnail(null, null);
+            PreviewSelectionBox.Text = $"Object #{_selectedPreviewObjectId.Value} is no longer in the parsed skin.";
+            return;
+        }
+
+        UpdatePreviewSelectionThumbnail(skinObject, _selectedPreviewItem);
+        PreviewSelectionBox.Text = FormatPreviewSelection(skinObject, _selectedPreviewItem);
+    }
+
+    private void UpdatePreviewSelectionThumbnail(SkinObjectView? skinObject, Lr2PreviewItem? visibleItem)
+    {
+        if (PreviewSelectionImage is null || PreviewSelectionImageLabel is null) return;
+
+        PreviewSelectionImage.Source = null;
+        PreviewSelectionImageLabel.Visibility = Visibility.Visible;
+
+        if (skinObject is null)
+        {
+            PreviewSelectionImageLabel.Text = "No image selected";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(skinObject.ImagePath))
+        {
+            PreviewSelectionImageLabel.Text = "No image";
+            return;
+        }
+
+        var thumbnailItem = visibleItem ?? new Lr2PreviewItem(
+            skinObject,
+            new PreviewRect(skinObject.DestX, skinObject.DestY, skinObject.DestWidth, skinObject.DestHeight),
+            0,
+            skinObject.Id,
+            1.0,
+            255,
+            255,
+            255,
+            0,
+            0,
+            0,
+            0);
+
+        if (_bitmapFactory.TryCreateFrameBitmap(thumbnailItem, out var bitmap))
+        {
+            PreviewSelectionImage.Source = bitmap;
+            PreviewSelectionImageLabel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        PreviewSelectionImageLabel.Text = "Image unavailable";
+    }
+    private string ReadPreviewEditModeLabel()
+    {
+        return _previewEditMode ? "EDIT" : "READ-ONLY";
+    }
+    private string FormatPreviewSelection(SkinObjectView skinObject, Lr2PreviewItem? visibleItem)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Mode: {ReadPreviewEditModeLabel()}");
+        builder.AppendLine($"Object #{skinObject.Id}");
+        builder.AppendLine($"Group: {ReadSkinHelpGroup(skinObject.Kind)}");
+        builder.AppendLine($"Kind: {skinObject.Kind}");
+        builder.AppendLine($"Image: {FormatMissing(skinObject.ImagePath)}");
+        builder.AppendLine($"Source file: {skinObject.SourceFile}");
+        builder.AppendLine($"SRC line: {skinObject.SrcLine}");
+        builder.AppendLine($"DST line: {(skinObject.DstLine > 0 ? skinObject.DstLine.ToString(CultureInfo.InvariantCulture) : "none")}");
+        builder.AppendLine($"Editable: {(skinObject.IsEditableInMain ? "main file" : "include file")}");
+        builder.AppendLine();
+
+        builder.AppendLine("Current render");
+        if (visibleItem is null)
+        {
+            builder.AppendLine("visible: no at current preview time/options");
+        }
+        else
+        {
+            builder.AppendLine($"visible: yes");
+            builder.AppendLine($"position: {FormatPreviewRect(visibleItem.Destination)}");
+            builder.AppendLine($"source frame: {visibleItem.SourceFrame}");
+            builder.AppendLine($"opacity: {FormatDouble(visibleItem.Opacity)}");
+            builder.AppendLine($"rgb: {visibleItem.Red},{visibleItem.Green},{visibleItem.Blue}");
+            builder.AppendLine($"blend/filter: {visibleItem.Blend}/{visibleItem.Filter}");
+            builder.AppendLine($"angle/center: {FormatDouble(visibleItem.Angle)}/{visibleItem.Center}");
+            builder.AppendLine($"sort id: {visibleItem.SortId}");
+        }
+        builder.AppendLine();
+
+        builder.AppendLine("SRC fields");
+        builder.AppendLine($"index: {skinObject.SourceIndex}");
+        builder.AppendLine($"graph: {skinObject.SourceGraph}");
+        builder.AppendLine($"rect: x={skinObject.SourceX}, y={skinObject.SourceY}, w={skinObject.SourceWidth}, h={skinObject.SourceHeight}");
+        builder.AppendLine($"div: {skinObject.SourceDivX} x {skinObject.SourceDivY}");
+        builder.AppendLine($"cycle/timer: {skinObject.SourceCycle}/{skinObject.SourceTimer}");
+        builder.AppendLine($"op: {skinObject.SourceOp1}, {skinObject.SourceOp2}, {skinObject.SourceOp3}, {skinObject.SourceOp4}, {skinObject.SourceOp5}");
+        builder.AppendLine();
+
+        builder.AppendLine("DST base");
+        builder.AppendLine($"rect: x={skinObject.DestX}, y={skinObject.DestY}, w={skinObject.DestWidth}, h={skinObject.DestHeight}");
+        builder.AppendLine($"loop/timer: {skinObject.DestLoop}/{skinObject.DestTimer}");
+        builder.AppendLine($"op: {skinObject.DestOp1}, {skinObject.DestOp2}, {skinObject.DestOp3}, {skinObject.DestOp4}, {skinObject.DestOp5}");
+        builder.AppendLine();
+
+        builder.AppendLine($"DST frames ({skinObject.Frames.Count})");
+        foreach (var frame in skinObject.Frames)
+        {
+            builder.AppendLine($"line {frame.Line}: t={frame.Time}, x={FormatDouble(frame.X)}, y={FormatDouble(frame.Y)}, w={FormatDouble(frame.Width)}, h={FormatDouble(frame.Height)}, acc={frame.Acc}, a={frame.Alpha}, rgb={frame.Red}/{frame.Green}/{frame.Blue}, blend={frame.Blend}, filter={frame.Filter}, angle={FormatDouble(frame.Angle)}, center={frame.Center}");
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string FormatPreviewRect(PreviewRect rect)
+    {
+        return $"x={FormatDouble(rect.X)}, y={FormatDouble(rect.Y)}, w={FormatDouble(rect.Width)}, h={FormatDouble(rect.Height)}";
+    }
+
+    private static string FormatDouble(double value)
+    {
+        return value.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatMissing(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "(none)" : value;
     }
 
     private static void ApplyRotation(FrameworkElement element, double angle, int center)
@@ -771,6 +1254,265 @@ public partial class MainWindow : Window
         return string.IsNullOrWhiteSpace(cleaned) ? "new" : cleaned;
     }
 
+    private void LoadSkinHelp()
+    {
+        _skinHelpTemplates.Clear();
+        _skinHelpTemplatesByCommand.Clear();
+        _skinHelpGroupByCommand.Clear();
+
+        var groupPath = FindSkinObjGroupPath();
+        if (groupPath is not null)
+        {
+            LoadSkinObjectGroups(groupPath);
+        }
+
+        var path = FindSkinHelperPath();
+        if (path is null)
+        {
+            SkinHelpGrid.ItemsSource = null;
+            SkinHelpPathText.Text = groupPath is null ? "skinHelper.txt and skinObjGroup.txt not found." : $"skinHelper.txt not found. Groups: {groupPath}";
+            SkinHelpSummaryText.Text = "0 row(s)";
+            return;
+        }
+
+        try
+        {
+            foreach (var line in File.ReadLines(path, Encoding.UTF8))
+            {
+                var rawLine = line.Trim();
+                if (rawLine.Length == 0) continue;
+
+                var fields = CsvUtil.Split(rawLine);
+                if (fields.Count == 0 || string.IsNullOrWhiteSpace(fields[0])) continue;
+
+                var command = fields[0].Trim();
+                var arguments = string.Join(", ", fields.Skip(1).Select(field => field.Trim()));
+                var entry = new SkinHelpEntry("Helper", string.Empty, ReadSkinHelpGroup(command), command, arguments, rawLine, isTemplate: true, rawLine);
+                _skinHelpTemplates.Add(entry);
+                _skinHelpTemplatesByCommand[command] = entry;
+            }
+        }
+        catch (Exception ex)
+        {
+            SkinHelpGrid.ItemsSource = null;
+            SkinHelpPathText.Text = $"Failed to read {path}: {ex.Message}";
+            SkinHelpSummaryText.Text = "0 row(s)";
+            return;
+        }
+
+        SkinHelpPathText.Text = groupPath is null ? path : $"{path} / {groupPath}";
+        ApplySkinHelpFilter();
+    }
+
+    private void RefreshSkinHelpRows()
+    {
+        _skinHelpRows.Clear();
+        if (_document is null)
+        {
+            ApplySkinHelpFilter();
+            return;
+        }
+
+        foreach (var line in _document.Lines.Where(line => line.Fields.Count > 0))
+        {
+            _skinHelpTemplatesByCommand.TryGetValue(line.Command, out var template);
+            var source = IOPath.GetFileName(line.SourcePath);
+            if (!line.IsMainFile)
+            {
+                source += " (include)";
+            }
+
+            var arguments = FormatSkinHelpArguments(line, template);
+            var detail = FormatSkinHelpDetail(line, template, arguments);
+            _skinHelpRows.Add(new SkinHelpEntry(
+                source,
+                line.SourceLine.ToString(CultureInfo.InvariantCulture),
+                ReadSkinHelpGroup(line.Command),
+                line.Command,
+                arguments,
+                line.RawText.Trim(),
+                isTemplate: false,
+                detail));
+        }
+
+        ApplySkinHelpFilter();
+    }
+
+    private void ApplySkinHelpFilter()
+    {
+        if (SkinHelpGrid is null || SkinHelpSearchBox is null || SkinHelpSummaryText is null) return;
+
+        var sourceRows = ReadSkinHelpMode() == "templates" || (_document is null && _skinHelpRows.Count == 0)
+            ? _skinHelpTemplates
+            : _skinHelpRows;
+        var query = SkinHelpSearchBox.Text.Trim();
+        var filtered = string.IsNullOrWhiteSpace(query)
+            ? sourceRows
+            : sourceRows
+                .Where(entry =>
+                    entry.Source.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Line.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Group.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Command.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Arguments.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    entry.RawLine.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        SkinHelpGrid.ItemsSource = null;
+        SkinHelpGrid.ItemsSource = filtered;
+        var label = ReferenceEquals(sourceRows, _skinHelpTemplates) ? "template" : "skin row";
+        SkinHelpSummaryText.Text = $"{filtered.Count:N0} / {sourceRows.Count:N0} {label}(s)";
+    }
+
+    private void InsertSelectedSkinHelpLine()
+    {
+        if (SkinHelpGrid.SelectedItem is not SkinHelpEntry entry)
+        {
+            SetStatus("Select a help row first.");
+            return;
+        }
+
+        var template = entry.IsTemplate
+            ? entry
+            : _skinHelpTemplatesByCommand.TryGetValue(entry.Command, out var matchedTemplate)
+                ? matchedTemplate
+                : null;
+
+        if (template is null)
+        {
+            SetStatus($"No helper template for {entry.Command}.");
+            return;
+        }
+
+        CodeEditor.Focus();
+        var insertion = template.RawLine + Environment.NewLine;
+        var insertionStart = CodeEditor.SelectionStart;
+        CodeEditor.SelectedText = insertion;
+        CodeEditor.CaretIndex = insertionStart + insertion.Length;
+        SetStatus($"Inserted {template.Command} template.");
+    }
+
+    private void SelectCurrentSkinHelpMode()
+    {
+        if (SkinHelpModeBox is not null && SkinHelpModeBox.SelectedIndex != 0)
+        {
+            SkinHelpModeBox.SelectedIndex = 0;
+        }
+    }
+    private string ReadSkinHelpGroup(string command)
+    {
+        return _skinHelpGroupByCommand.TryGetValue(command, out var group) ? group : string.Empty;
+    }
+
+    private void LoadSkinObjectGroups(string path)
+    {
+        var currentGroup = string.Empty;
+        foreach (var rawLine in File.ReadLines(path, Encoding.UTF8))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            if (line.StartsWith('$'))
+            {
+                currentGroup = line;
+                continue;
+            }
+
+            if (line.StartsWith('#') && currentGroup.Length > 0)
+            {
+                _skinHelpGroupByCommand[line] = currentGroup;
+            }
+        }
+    }
+    private string ReadSkinHelpMode()
+    {
+        return SkinHelpModeBox is not null && SkinHelpModeBox.SelectedItem is ComboBoxItem item && item.Tag is string tag
+            ? tag
+            : "current";
+    }
+
+    private static string FormatSkinHelpArguments(SkinCommandLine line, SkinHelpEntry? template)
+    {
+        if (line.Fields.Count <= 1) return string.Empty;
+
+        IReadOnlyList<string> templateFields = template is null ? Array.Empty<string>() : CsvUtil.Split(template.RawLine);
+        var parts = new List<string>();
+        for (var i = 1; i < line.Fields.Count; i++)
+        {
+            parts.Add($"{i}:{ReadSkinHelpFieldName(templateFields, i)}={line.Fields[i].Trim()}");
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string FormatSkinHelpDetail(SkinCommandLine line, SkinHelpEntry? template, string arguments)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"{line.SourcePath}:{line.SourceLine}");
+        builder.AppendLine(line.RawText.Trim());
+        builder.AppendLine();
+
+        if (line.Fields.Count <= 1)
+        {
+            builder.AppendLine("No arguments.");
+            return builder.ToString().TrimEnd();
+        }
+
+        IReadOnlyList<string> templateFields = template is null ? Array.Empty<string>() : CsvUtil.Split(template.RawLine);
+        for (var i = 1; i < line.Fields.Count; i++)
+        {
+            builder.AppendLine($"{i}: {ReadSkinHelpFieldName(templateFields, i)} = {line.Fields[i].Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(arguments))
+        {
+            builder.AppendLine();
+            builder.AppendLine(arguments);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string ReadSkinHelpFieldName(IReadOnlyList<string> templateFields, int index)
+    {
+        if (index >= 0 && index < templateFields.Count && !string.IsNullOrWhiteSpace(templateFields[index]))
+        {
+            return templateFields[index].Trim();
+        }
+
+        return $"field{index}";
+    }
+
+    private static string? FindSkinObjGroupPath()
+    {
+        return FindSkinSupportFile("skinObjGroup.txt");
+    }
+    private static string? FindSkinHelperPath()
+    {
+        return FindSkinSupportFile("skinHelper.txt");
+    }
+
+    private static string? FindSkinSupportFile(string fileName)
+    {
+        var candidates = new[]
+        {
+            IOPath.Combine(AppContext.BaseDirectory, fileName),
+            IOPath.Combine(Environment.CurrentDirectory, fileName),
+            IOPath.Combine(Environment.CurrentDirectory, "SkinEditorNext", fileName),
+            IOPath.Combine(AppContext.BaseDirectory, "..", "..", "..", fileName)
+        };
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in candidates)
+        {
+            var fullPath = IOPath.GetFullPath(candidate);
+            if (!seen.Add(fullPath)) continue;
+            if (File.Exists(fullPath)) return fullPath;
+        }
+
+        return null;
+    }
+
     private void SetEmptyState()
     {
         FilePathText.Text = "No file loaded.";
@@ -781,11 +1523,17 @@ public partial class MainWindow : Window
         ObjectsGrid.ItemsSource = null;
         ImageAssetBox.ItemsSource = null;
         AssetsSummaryText.Text = "0 image(s)";
+        _skinHelpRows.Clear();
+        ApplySkinHelpFilter();
         ResolutionWidthBox.Text = "640";
         ResolutionHeightBox.Text = "480";
         PreviewCanvas.Width = 640;
         PreviewCanvas.Height = 480;
         PreviewOverlay.Text = "Open a .lr2skin file.";
+        _selectedPreviewObjectId = null;
+        _selectedPreviewItem = null;
+        ClearPreviewDrag();
+        UpdatePreviewSelectionPanel();
         PreviewTimeBox.Text = "1000";
         PreviewTimeSlider.Value = 1000;
         PreviewModeBox.SelectedIndex = 0;

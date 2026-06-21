@@ -141,7 +141,9 @@ public sealed class Lr2SkinParser
             }
             else if (IsCommand(fields[0], "#INCLUDE") && depth < MaxIncludeDepth)
             {
-                var includePath = ResolvePath(sourcePath, fields.Count > 1 ? fields[1] : string.Empty, document.CustomFileRules);
+                var includeRawPath = fields.Count > 1 ? fields[1] : string.Empty;
+                AddLr2LoadPathCompatibilityDiagnostic(document, sourcePath, sourceLine, "#INCLUDE", includeRawPath);
+                var includePath = ResolvePath(sourcePath, includeRawPath, document.CustomFileRules);
                 if (includePath is null)
                 {
                     document.Diagnostics.Add($"{Path.GetFileName(sourcePath)}:{sourceLine} include path is empty.");
@@ -262,6 +264,8 @@ public sealed class Lr2SkinParser
             {
                 var imagePath = line.Fields.Count > 1 ? line.Fields[1] : string.Empty;
                 var resolvedPath = ResolvePath(line.SourcePath, imagePath, document.CustomFileRules) ?? imagePath;
+                AddLr2LoadPathCompatibilityDiagnostic(document, line.SourcePath, line.SourceLine, "#IMAGE", imagePath);
+                AddImageLoadDiagnostic(document, line.SourcePath, line.SourceLine, imagePath, resolvedPath);
                 images[imageIndex] = resolvedPath;
                 document.ImageSlots.Add(new SkinImageSlot(
                     imageIndex,
@@ -512,6 +516,85 @@ public sealed class Lr2SkinParser
         public bool CurrentActive { get; set; } = currentActive;
     }
 
+    private static void AddLr2LoadPathCompatibilityDiagnostic(
+        Lr2SkinDocument document,
+        string sourcePath,
+        int sourceLine,
+        string command,
+        string rawPath)
+    {
+        var cleaned = CleanLoadPath(rawPath);
+        if (IsSpecialLoadPath(cleaned) || Path.IsPathRooted(cleaned) || IsLr2RootRelativePath(cleaned))
+        {
+            return;
+        }
+
+        if (!IsInsideLr2files(sourcePath))
+        {
+            return;
+        }
+
+        document.Diagnostics.Add($"{Path.GetFileName(sourcePath)}:{sourceLine} {command} may not load in LR2: use an LR2files\\... path instead of '{cleaned}'.");
+    }
+
+    private static void AddImageLoadDiagnostic(
+        Lr2SkinDocument document,
+        string sourcePath,
+        int sourceLine,
+        string rawPath,
+        string resolvedPath)
+    {
+        var cleaned = CleanLoadPath(rawPath);
+        if (IsSpecialLoadPath(cleaned) || cleaned.Contains('*') || string.Equals(cleaned, "CONTINUE", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!File.Exists(resolvedPath))
+        {
+            document.Diagnostics.Add($"{Path.GetFileName(sourcePath)}:{sourceLine} image not found: {cleaned} -> {resolvedPath}");
+        }
+    }
+
+    private static string CleanLoadPath(string rawPath)
+    {
+        return rawPath.Trim().Trim('"').Trim();
+    }
+
+    private static bool IsSpecialLoadPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return true;
+        if (string.Equals(path, "CONTINUE", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(path, "dummy", StringComparison.OrdinalIgnoreCase)) return true;
+        if (path.StartsWith("dummy.", StringComparison.OrdinalIgnoreCase)) return true;
+        if (path.Contains('*')) return true;
+        return false;
+    }
+
+    private static bool IsLr2RootRelativePath(string path)
+    {
+        var normalized = NormalizeLr2RootRelativePath(path);
+        return normalized.Equals("LR2files", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("LR2files" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsInsideLr2files(string path)
+    {
+        var directory = File.Exists(path)
+            ? Path.GetDirectoryName(Path.GetFullPath(path))
+            : Path.GetFullPath(path);
+
+        if (string.IsNullOrWhiteSpace(directory)) return false;
+
+        var dir = new DirectoryInfo(directory);
+        while (dir is not null)
+        {
+            if (dir.Name.Equals("LR2files", StringComparison.OrdinalIgnoreCase)) return true;
+            dir = dir.Parent;
+        }
+
+        return false;
+    }
     private static string? ResolvePath(string sourcePath, string rawPath, IReadOnlyList<CustomFileRule>? customFileRules = null)
     {
         if (string.IsNullOrWhiteSpace(rawPath)) return null;
@@ -591,7 +674,7 @@ public sealed class Lr2SkinParser
         return normalized;
     }
 
-    private static Encoding DetectEncoding(byte[] bytes)
+    public static Encoding DetectEncoding(byte[] bytes)
     {
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
         {
