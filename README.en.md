@@ -1,4 +1,4 @@
-# SkinEditorNext
+# SkinEditorNext (English)
 
 Languages: [English](README.en.md) | [Korean](README.ko.md) | [Japanese](README.ja.md)
 

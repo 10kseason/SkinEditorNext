@@ -823,23 +823,30 @@ public partial class MainWindow : Window
 
     private void AddTextPlaceholder(Lr2PreviewItem item, Rect dest)
     {
+        var placeholderColor = Color.FromRgb((byte)item.Red, (byte)item.Green, (byte)item.Blue);
+        var isGuide = item.Object.SourceIndex is >= 9000 and < 9100;
+        var label = ReadTextPlaceholderLabel(item.Object);
         var border = new Border
         {
             Width = dest.Width,
             Height = dest.Height,
             Opacity = item.Opacity,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(250, 204, 21)),
-            BorderThickness = new Thickness(1),
-            Background = new SolidColorBrush(Color.FromArgb(32, (byte)item.Red, (byte)item.Green, (byte)item.Blue)),
+            BorderBrush = new SolidColorBrush(placeholderColor),
+            BorderThickness = new Thickness(isGuide ? 2 : 1),
+            Background = new SolidColorBrush(Color.FromArgb(isGuide ? (byte)92 : (byte)32, placeholderColor.R, placeholderColor.G, placeholderColor.B)),
             Child = new TextBlock
             {
-                Text = "TEXT",
-                Foreground = new SolidColorBrush(Color.FromRgb((byte)item.Red, (byte)item.Green, (byte)item.Blue)),
+                Text = label,
+                Foreground = new SolidColorBrush(ReadContrastingTextColor(placeholderColor)),
                 FontFamily = new FontFamily("Consolas"),
-                FontSize = Math.Clamp(dest.Height * 0.45, 10, 28),
+                FontWeight = isGuide ? FontWeights.SemiBold : FontWeights.Normal,
+                FontSize = Math.Clamp(Math.Min(dest.Height * 0.18, dest.Width * 0.22), 9, 28),
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Padding = new Thickness(4, 0, 4, 0)
             },
             IsHitTestVisible = false
         };
@@ -848,6 +855,34 @@ public partial class MainWindow : Window
         Canvas.SetLeft(border, dest.X);
         Canvas.SetTop(border, dest.Y);
         PreviewCanvas.Children.Add(border);
+    }
+
+    private static string ReadTextPlaceholderLabel(SkinObjectView skinObject)
+    {
+        if (skinObject.SourceIndex is >= 9010 and <= 9016)
+        {
+            return $"LANE {skinObject.SourceIndex - 9009}";
+        }
+
+        if (skinObject.SourceIndex is >= 9020 and <= 9024)
+        {
+            return $"KEY {skinObject.SourceIndex - 9019}";
+        }
+
+        return skinObject.SourceIndex switch
+        {
+            9000 => "NOTE LINE",
+            9001 => "KEY AREA",
+            9002 => "GAUGE",
+            9003 => "BGA AREA",
+            _ => "TEXT"
+        };
+    }
+
+    private static Color ReadContrastingTextColor(Color background)
+    {
+        var luminance = background.R * 0.299 + background.G * 0.587 + background.B * 0.114;
+        return luminance > 160 ? Color.FromRgb(17, 24, 39) : Color.FromRgb(229, 231, 235);
     }
 
     private void PreviewCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

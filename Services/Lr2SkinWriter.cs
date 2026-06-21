@@ -58,15 +58,103 @@ public sealed class Lr2SkinWriter
             CsvUtil.Join(["#RESOLUTION", settings.Width.ToString(CultureInfo.InvariantCulture), settings.Height.ToString(CultureInfo.InvariantCulture)]),
             "#ENDOFHEADER",
             string.Empty,
+            "// Runtime anchors. Keep these while learning; LR2 uses them to decide scene timing.",
             "#STARTINPUT,100",
             "#LOADSTART,0",
             "#LOADEND,1000",
             "#PLAYSTART,3200",
             "#FADEOUT,500",
-            "#CLOSE,3400"
+            "#CLOSE,3400",
+            string.Empty
         };
 
+        lines.AddRange(CreateBeginnerSkeleton(settings));
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
+    }
+
+    private static IEnumerable<string> CreateBeginnerSkeleton(NewSkinSettings settings)
+    {
+        var width = Math.Max(1, settings.Width);
+        var height = Math.Max(1, settings.Height);
+        var guideFontSize = Math.Clamp(Scale(height, 22, 720), 12, 44);
+        var margin = Scale(width, 8, 1280);
+        var playfieldWidth = Scale(width, 440, 1280);
+        var noteHeight = Scale(height, 398, 720);
+        var keyY = Scale(height, 406, 720);
+        var keyHeight = Math.Max(1, height - keyY - margin);
+        var gaugeX = Scale(width, 458, 1280);
+        var gaugeY = Scale(height, 36, 720);
+        var gaugeWidth = Scale(width, 48, 1280);
+        var gaugeHeight = Math.Max(1, height - gaugeY - margin);
+        var bgaX = Scale(width, 512, 1280);
+        var bgaWidth = Math.Max(1, width - bgaX - margin);
+
+        var lines = new List<string>
+        {
+            "// Beginner starter guide: visible placeholders, no image files required.",
+            "// The 9000-series #SRC_TEXT rows are editor guide blocks for the first layout pass.",
+            "// In Preview, select a guide block, press L for edit mode, then drag or use arrow keys.",
+            "// Add real assets with Add Image, then replace these guide rows with #SRC_IMAGE/#DST_IMAGE objects.",
+            FontLine(guideFontSize),
+            string.Empty
+        };
+
+        AddGuide(lines, "BGA area placeholder. Use this for the remaining right-side background/BGA.", 9003, bgaX, 0, bgaWidth, height, 180, 245, 245, 245);
+        AddGuide(lines, "Note lane guide. Put lane background, notes, lane cover, and hit effects here.", 9000, margin, margin, playfieldWidth, noteHeight, 180, 55, 65, 65);
+        AddGuide(lines, "Key area guide. Put key beams, judge line, keyboard panel, and lower UI here.", 9001, margin, keyY, playfieldWidth, keyHeight, 160, 90, 90, 90);
+        AddGuide(lines, "Gauge bar guide. This narrow strip separates playfield and BGA.", 9002, gaugeX, gaugeY, gaugeWidth, gaugeHeight, 210, 239, 68, 68);
+
+        lines.Add(string.Empty);
+        lines.Add("// Lane column guides inside the note lane.");
+        var laneGap = Scale(width, 5, 1280);
+        var laneCount = 7;
+        var laneWidth = Math.Max(1, (playfieldWidth - laneGap * (laneCount + 1)) / laneCount);
+        var laneY = margin + Scale(height, 8, 720);
+        var laneHeight = Math.Max(1, noteHeight - Scale(height, 28, 720));
+        for (var lane = 0; lane < laneCount; lane++)
+        {
+            var x = margin + laneGap + lane * (laneWidth + laneGap);
+            AddGuide(lines, $"Lane {lane + 1} guide column.", 9010 + lane, x, laneY, laneWidth, laneHeight, 110, 34, 39, 46);
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("// Key/button guides inside the lower key area.");
+        var keyBoxCount = 5;
+        var keyBoxWidth = Scale(width, 70, 1280);
+        var keyBoxHeight = Scale(height, 96, 720);
+        var keyBoxGap = Scale(width, 34, 1280);
+        var keyBoxStartX = margin + Scale(width, 26, 1280);
+        var keyBoxTopY = keyY + Scale(height, 38, 720);
+        var keyBoxBottomY = keyY + Scale(height, 158, 720);
+        for (var key = 0; key < keyBoxCount; key++)
+        {
+            var x = keyBoxStartX + key * (keyBoxWidth + keyBoxGap);
+            var y = key % 2 == 0 ? keyBoxTopY : keyBoxBottomY;
+            AddGuide(lines, $"Key {key + 1} guide block.", 9020 + key, x, y, keyBoxWidth, keyBoxHeight, 150, 234, 179, 8);
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("// Example image object shape, left commented until you have a real asset path:");
+        lines.Add("// #IMAGE,LR2files\\Theme\\YourSkin\\assets\\background.png");
+        lines.Add("// #SRC_IMAGE,0,0,0,0,1280,720,1,1,0,0,0,0,0,0,0");
+        lines.Add("// #DST_IMAGE,0,0,0,0,1280,720,0,255,255,255,255,1,0,0,0,0,0,0,0,0,0,0");
+        return lines;
+    }
+
+    private static void AddGuide(List<string> lines, string comment, int index, int x, int y, int width, int height, int alpha, int red, int green, int blue)
+    {
+        lines.Add($"// {comment}");
+        lines.AddRange(TextObjectLines(index, 0, 11, 1, TextDst(0, x, y, width, height, alpha, red, green, blue)));
+    }
+
+    private static Lr2DstSpec TextDst(int time, int x, int y, int width, int size, int alpha, int red, int green, int blue)
+    {
+        return new Lr2DstSpec(time, x, y, width, size, 0, alpha, red, green, blue, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
+    private static int Scale(int actual, int value, int basis)
+    {
+        return Math.Max(1, (int)Math.Round(value * actual / (double)basis));
     }
 
     public static string ImageLine(string relativePath)
@@ -104,11 +192,16 @@ public sealed class Lr2SkinWriter
 
     public static IReadOnlyList<string> TextObjectLines(int fontSlot, int textKind, int align, Lr2DstSpec dst)
     {
+        return TextObjectLines(0, fontSlot, textKind, align, dst);
+    }
+
+    public static IReadOnlyList<string> TextObjectLines(int index, int fontSlot, int textKind, int align, Lr2DstSpec dst)
+    {
         // #SRC_TEXT has a different field shape from image-like sources, so do not route it through SourceLine.
         return [
             CsvUtil.Join([
                 "#SRC_TEXT",
-                "0",
+                index.ToString(CultureInfo.InvariantCulture),
                 fontSlot.ToString(CultureInfo.InvariantCulture),
                 textKind.ToString(CultureInfo.InvariantCulture),
                 align.ToString(CultureInfo.InvariantCulture),
@@ -118,7 +211,7 @@ public sealed class Lr2SkinWriter
                 "0",
                 "0"
             ]),
-            DstLine("#DST_TEXT", 0, dst)
+            DstLine("#DST_TEXT", index, dst)
         ];
     }
 
