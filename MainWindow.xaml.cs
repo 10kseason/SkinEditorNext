@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, SkinHelpEntry> _skinHelpTemplatesByCommand = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _skinHelpGroupByCommand = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SkinHelpEntry> _skinHelpRows = new();
+    private readonly List<SkinImportEntry> _skinImportEntries = new();
     private readonly List<Lr2PreviewItem> _previewItems = new();
     private Lr2SkinDocument? _document;
     private bool _loadingEditor;
@@ -42,6 +43,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         LoadSkinHelp();
+        RefreshLr2ThemeImports();
         SetEmptyState();
     }
 
@@ -92,6 +94,50 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog(this) != true) return;
         OpenDocument(dialog.FileName);
+    }
+
+    private void ImportSkin_Click(object sender, RoutedEventArgs e)
+    {
+        if (Lr2ImportSkinBox.SelectedItem is not SkinImportEntry entry)
+        {
+            SetStatus("Select an LR2 Theme skin first.");
+            return;
+        }
+
+        if (!OpenDocument(entry.FullPath)) return;
+
+        if (TryReadImportResolutionPreset(out var width, out var height, out var presetName))
+        {
+            SetEditorText(Lr2SkinParser.ApplyResolution(CodeEditor.Text, width, height), markDirty: true);
+            RefreshDocumentFromEditor();
+            RenderPreview();
+            SetStatus($"Imported {entry.DisplayName}; applied {presetName} #RESOLUTION,{width},{height}. Save to write the change.");
+            return;
+        }
+
+        SetStatus($"Imported {entry.DisplayName}.");
+    }
+
+    private void ApplyImportResolution_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryReadImportResolutionPreset(out var width, out var height, out var presetName))
+        {
+            SetStatus("Select SD, HD, FHD, or 4K before applying.");
+            return;
+        }
+
+        SetEditorText(Lr2SkinParser.ApplyResolution(CodeEditor.Text, width, height), markDirty: true);
+        RefreshDocumentFromEditor();
+        RenderPreview();
+        SetStatus($"Applied {presetName} #RESOLUTION,{width},{height}. Save to write the change.");
+    }
+
+    private void RefreshLr2Import_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshLr2ThemeImports();
+        SetStatus(_skinImportEntries.Count == 0
+            ? "LR2files\\Theme not found or no .lr2skin files were found."
+            : $"Found {_skinImportEntries.Count:N0} LR2 Theme skin(s).");
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -145,6 +191,131 @@ public partial class MainWindow : Window
         SetStatus($"Applied #RESOLUTION,{width},{height}.");
     }
 
+    private void RefreshLr2ThemeImports()
+    {
+        if (Lr2ImportSkinBox is null || Lr2ImportSummaryText is null || ImportSkinButton is null || ApplyImportResolutionButton is null || ImportResolutionPresetBox is null) return;
+
+        _skinImportEntries.Clear();
+        Lr2ImportSkinBox.ItemsSource = null;
+
+        var themeDirectory = FindLr2ThemeDirectory();
+        if (themeDirectory is null)
+        {
+            Lr2ImportSummaryText.Text = "not found";
+            Lr2ImportSkinBox.IsEnabled = false;
+            ImportSkinButton.IsEnabled = false;
+            ImportResolutionPresetBox.IsEnabled = true;
+            ApplyImportResolutionButton.IsEnabled = true;
+            return;
+        }
+
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(themeDirectory, "*.lr2skin", SearchOption.AllDirectories)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var relativePath = IOPath.GetRelativePath(themeDirectory, path);
+                _skinImportEntries.Add(new SkinImportEntry(
+                    path,
+                    relativePath,
+                    relativePath.Replace('\\', '/')));
+            }
+        }
+        catch (Exception ex)
+        {
+            Lr2ImportSummaryText.Text = $"scan failed: {ex.Message}";
+            Lr2ImportSkinBox.IsEnabled = false;
+            ImportSkinButton.IsEnabled = false;
+            ImportResolutionPresetBox.IsEnabled = true;
+            ApplyImportResolutionButton.IsEnabled = true;
+            return;
+        }
+
+        Lr2ImportSkinBox.ItemsSource = _skinImportEntries;
+        Lr2ImportSkinBox.IsEnabled = _skinImportEntries.Count > 0;
+        ImportSkinButton.IsEnabled = _skinImportEntries.Count > 0;
+        ImportResolutionPresetBox.IsEnabled = true;
+        ApplyImportResolutionButton.IsEnabled = true;
+        if (_skinImportEntries.Count > 0)
+        {
+            Lr2ImportSkinBox.SelectedIndex = 0;
+        }
+
+        Lr2ImportSummaryText.Text = _skinImportEntries.Count == 0
+            ? "0 skin(s)"
+            : $"{_skinImportEntries.Count:N0} skin(s)";
+    }
+
+    private bool TryReadImportResolutionPreset(out int width, out int height, out string presetName)
+    {
+        width = 0;
+        height = 0;
+        presetName = string.Empty;
+
+        if (ImportResolutionPresetBox.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
+        {
+            return false;
+        }
+
+        if (tag.Equals("keep", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var parts = tag.Split(',', 2, StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 ||
+            !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out width) ||
+            !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out height) ||
+            width <= 0 ||
+            height <= 0)
+        {
+            return false;
+        }
+
+        presetName = item.Content?.ToString() ?? $"{width}x{height}";
+        return true;
+    }
+
+    private static string? FindLr2ThemeDirectory()
+    {
+        foreach (var root in EnumerateLr2RootCandidates())
+        {
+            var themeDirectory = IOPath.Combine(root, "LR2files", "Theme");
+            if (Directory.Exists(themeDirectory))
+            {
+                return themeDirectory;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateLr2RootCandidates()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var seed in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        {
+            if (string.IsNullOrWhiteSpace(seed)) continue;
+
+            DirectoryInfo? directory;
+            try
+            {
+                directory = new DirectoryInfo(IOPath.GetFullPath(seed));
+            }
+            catch
+            {
+                continue;
+            }
+
+            for (var depth = 0; directory is not null && depth < 8; depth++, directory = directory.Parent)
+            {
+                if (seen.Add(directory.FullName))
+                {
+                    yield return directory.FullName;
+                }
+            }
+        }
+    }
     private void ApplyObject_Click(object sender, RoutedEventArgs e)
     {
         if (ObjectsGrid.SelectedItem is not SkinObjectView item)
@@ -443,7 +614,7 @@ public partial class MainWindow : Window
         InsertSelectedSkinHelpLine();
     }
 
-    private void OpenDocument(string path)
+    private bool OpenDocument(string path)
     {
         try
         {
@@ -454,10 +625,12 @@ public partial class MainWindow : Window
             UpdateDocumentViews();
             RenderPreview();
             SetStatus($"Opened {IOPath.GetFileName(path)}.");
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Open failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
     }
 
@@ -1657,4 +1830,6 @@ public partial class MainWindow : Window
             : IOPath.GetFileName(_document.MainPath);
         Title = (_dirty ? "*" : string.Empty) + name + " - LR2 Skin Editor Next";
     }
+
+    private sealed record SkinImportEntry(string FullPath, string RelativePath, string DisplayName);
 }

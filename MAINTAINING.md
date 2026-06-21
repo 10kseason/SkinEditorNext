@@ -1,12 +1,12 @@
-﻿# SkinEditorNext Maintenance Notes
+# SkinEditorNext Maintenance Notes
 
 ## Where to edit
 
 - New skin generation and LR2 command output: `Services/Lr2SkinWriter.cs`
 - LR2 parsing, include flattening, image/font slot discovery, and diagnostics:
   `Services/Lr2SkinParser.cs`
-- Main editor UI behavior: `MainWindow.xaml.cs`
-- Main editor layout: `MainWindow.xaml`
+- Main editor UI behavior, LR2 Theme import scanning, and resolution preset application: `MainWindow.xaml.cs`
+- Main editor layout, including the import and asset-preview panels: `MainWindow.xaml`
 - Preview image loading: `Services/Lr2BitmapFactory.cs`
 - Help-tab data shape: `Models/SkinHelpEntry.cs`, `skinHelper.txt`,
   `skinObjGroup.txt`
@@ -25,6 +25,7 @@
   continue to target the preview canvas.
 - Prefer LR2-loadable asset paths. When an asset is under an `LR2files` tree,
   write `LR2files\...` instead of a skin-local relative path.
+- LR2 Theme import must only scan local `LR2files\Theme` candidates near the executable/current directory. Resolution presets should update the editor buffer and mark it dirty; do not auto-save imported skins.
 - Add short comments when changing LR2 field order, asset path rules, include
   write-back behavior, or preview assumptions.
 

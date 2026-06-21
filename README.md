@@ -1,4 +1,4 @@
-﻿# SkinEditorNext
+# SkinEditorNext
 
 SkinEditorNext is a WPF editor for LR2 `.lr2skin` files. It focuses on safe
 inspection, command-level editing, and a preview surface that can be switched
@@ -7,11 +7,14 @@ between read-only and edit mode.
 ## Features
 
 - Open and parse `.lr2skin` files, including `#INCLUDE` files.
+- When launched from an LR2 folder, scan `LR2files\Theme` for `.lr2skin` import candidates, optionally apply Keep/SD/HD/FHD/4K presets on import, and apply SD/HD/FHD/4K `#RESOLUTION,width,height` directly to the current editor buffer.
 - Create a basic LR2 skin file with `#INFORMATION`, `#RESOLUTION`, runtime
   timing commands, and optional starter objects.
 - Edit raw skin text and save the main skin file.
 - Add PNG/BMP/TGA image assets. Assets under an `LR2files` tree are written as
   LR2-loadable `LR2files\...` paths.
+- Preview the selected `#IMAGE` asset in the left panel with source line, path,
+  and image size.
 - Preview LR2 objects with image loading, custom options, basic timer modes,
   interpolation, crop/div/cycle frame selection, alpha/RGB, angle, blend, and
   sort order handling.
@@ -53,5 +56,7 @@ Zip the output folder for distribution.
 - Unsupported image resources are shown as placeholders in preview.
 - Object creation UI is still intentionally basic; advanced command authoring
   may require raw text editing.
+- LR2 Theme import applies resolution presets to the editor buffer only. Use
+  Save when you want to overwrite the imported skin file.
 
 [ GOMazk](https://github.com/GOMazk) 님의 소스코드에서 파생된 프로젝트입니다
