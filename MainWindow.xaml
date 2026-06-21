@@ -55,6 +55,9 @@
                 </Grid.ColumnDefinitions>
 
                 <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="0,0,1,0" Padding="12">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalFirst">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -397,6 +400,7 @@
                             </DataGrid.Columns>
                         </DataGrid>
                     </Grid>
+                    </ScrollViewer>
                 </Border>
 
                 <GridSplitter Grid.Column="1"
