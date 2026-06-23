@@ -31,6 +31,8 @@ public partial class MainWindow : Window
     private bool _dirty;
     private int? _selectedPreviewObjectId;
     private Lr2PreviewItem? _selectedPreviewItem;
+    private FrameworkElement? _selectedPreviewVisual;
+    private Rectangle? _selectedPreviewAdorner;
     private bool _previewEditMode;
     private bool _draggingPreviewObject;
     private Point _previewDragStartPoint;
@@ -717,6 +719,8 @@ public partial class MainWindow : Window
         PreviewCanvas.Children.Clear();
         _previewItems.Clear();
         _selectedPreviewItem = null;
+        _selectedPreviewVisual = null;
+        _selectedPreviewAdorner = null;
 
         if (_document is null)
         {
@@ -741,51 +745,80 @@ public partial class MainWindow : Window
         PreviewCanvas.Height = resolution.Height;
         PreviewOverlay.Text = $"{resolution.Width} x {resolution.Height} / {renderItems.Count:N0} visible / {_document.Objects.Count:N0} objects / {(int)clock.TimeMs} ms / {clock.ModeName} / {ReadPreviewEditModeLabel()}";
 
-        PreviewCanvas.Children.Add(new Rectangle
-        {
-            Width = resolution.Width,
-            Height = resolution.Height,
-            Fill = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
-            IsHitTestVisible = false
-        });
-
-        foreach (var item in renderItems)
-        {
-            AddPreviewObject(item);
-        }
-
-        PreviewCanvas.Children.Add(new Rectangle
-        {
-            Width = resolution.Width,
-            Height = resolution.Height,
-            Stroke = new SolidColorBrush(Color.FromRgb(229, 231, 235)),
-            StrokeThickness = 1,
-            IsHitTestVisible = false
-        });
+        AddPreviewSceneBitmap(renderItems, resolution, _selectedPreviewItem?.Object.Id);
 
         if (_selectedPreviewItem is not null)
         {
+            AddSelectedPreviewVisual(_selectedPreviewItem);
             AddPreviewSelectionAdorner(_selectedPreviewItem);
         }
 
         UpdatePreviewSelectionPanel();
     }
 
-    private void AddPreviewObject(Lr2PreviewItem item)
+    private void AddPreviewSceneBitmap(IReadOnlyList<Lr2PreviewItem> renderItems, ResolutionInfo resolution, int? excludedObjectId)
     {
-        var dest = item.Destination;
-        if (dest.Width <= 0 || dest.Height <= 0) return;
-
-        var skinObject = item.Object;
-        if (skinObject.Kind.Equals("#SRC_TEXT", StringComparison.OrdinalIgnoreCase))
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
         {
-            AddTextPlaceholder(item, new Rect(dest.X, dest.Y, dest.Width, dest.Height));
-            return;
+            var bounds = new Rect(0, 0, resolution.Width, resolution.Height);
+            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(17, 24, 39)), null, bounds);
+
+            foreach (var item in renderItems)
+            {
+                if (excludedObjectId is not null && item.Object.Id == excludedObjectId.Value) continue;
+                DrawPreviewItem(dc, item);
+            }
+
+            dc.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromRgb(229, 231, 235)), 1), bounds);
         }
 
-        if (_bitmapFactory.TryCreateFrameBitmap(item, out var frameBitmap))
+        var bitmap = new RenderTargetBitmap(
+            resolution.Width,
+            resolution.Height,
+            96,
+            96,
+            PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        bitmap.Freeze();
+
+        var image = new Image
         {
-            var image = new Image
+            Source = bitmap,
+            Width = resolution.Width,
+            Height = resolution.Height,
+            Stretch = Stretch.Fill,
+            IsHitTestVisible = false
+        };
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
+        PreviewCanvas.Children.Add(image);
+    }
+
+    private void AddSelectedPreviewVisual(Lr2PreviewItem item)
+    {
+        var visual = CreatePreviewObjectVisual(item);
+        if (visual is null) return;
+
+        var dest = item.Destination;
+        _selectedPreviewVisual = visual;
+        Canvas.SetLeft(visual, dest.X);
+        Canvas.SetTop(visual, dest.Y);
+        PreviewCanvas.Children.Add(visual);
+    }
+
+    private FrameworkElement? CreatePreviewObjectVisual(Lr2PreviewItem item)
+    {
+        var dest = item.Destination;
+        if (dest.Width <= 0 || dest.Height <= 0) return null;
+
+        FrameworkElement visual;
+        if (item.Object.Kind.Equals("#SRC_TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            visual = CreateTextPlaceholderVisual(item, new Rect(dest.X, dest.Y, dest.Width, dest.Height));
+        }
+        else if (_bitmapFactory.TryCreateFrameBitmap(item, out var frameBitmap))
+        {
+            visual = new Image
             {
                 Source = frameBitmap,
                 Width = dest.Width,
@@ -794,39 +827,23 @@ public partial class MainWindow : Window
                 Opacity = item.Opacity,
                 IsHitTestVisible = false
             };
-
-            ApplyRotation(image, item.Angle, item.Center);
-            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
-            Canvas.SetLeft(image, dest.X);
-            Canvas.SetTop(image, dest.Y);
-            PreviewCanvas.Children.Add(image);
-            return;
+            RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.NearestNeighbor);
+        }
+        else
+        {
+            visual = CreateMissingPreviewObjectVisual(item, new Rect(dest.X, dest.Y, dest.Width, dest.Height));
         }
 
-        var outline = new Rectangle
-        {
-            Width = dest.Width,
-            Height = dest.Height,
-            Stroke = skinObject.Kind.Equals("#SRC_IMAGE", StringComparison.OrdinalIgnoreCase)
-                ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
-                : new SolidColorBrush(Color.FromRgb(250, 204, 21)),
-            StrokeThickness = 1,
-            StrokeDashArray = new DoubleCollection { 4, 3 },
-            Fill = new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)),
-            IsHitTestVisible = false
-        };
-        ApplyRotation(outline, item.Angle, item.Center);
-        Canvas.SetLeft(outline, dest.X);
-        Canvas.SetTop(outline, dest.Y);
-        PreviewCanvas.Children.Add(outline);
+        visual.IsHitTestVisible = false;
+        ApplyRotation(visual, item.Angle, item.Center);
+        return visual;
     }
 
-    private void AddTextPlaceholder(Lr2PreviewItem item, Rect dest)
+    private static Border CreateTextPlaceholderVisual(Lr2PreviewItem item, Rect dest)
     {
         var placeholderColor = Color.FromRgb((byte)item.Red, (byte)item.Green, (byte)item.Blue);
         var isGuide = item.Object.SourceIndex is >= 9000 and < 9100;
-        var label = ReadTextPlaceholderLabel(item.Object);
-        var border = new Border
+        return new Border
         {
             Width = dest.Width,
             Height = dest.Height,
@@ -836,7 +853,7 @@ public partial class MainWindow : Window
             Background = new SolidColorBrush(Color.FromArgb(isGuide ? (byte)92 : (byte)32, placeholderColor.R, placeholderColor.G, placeholderColor.B)),
             Child = new TextBlock
             {
-                Text = label,
+                Text = ReadTextPlaceholderLabel(item.Object),
                 Foreground = new SolidColorBrush(ReadContrastingTextColor(placeholderColor)),
                 FontFamily = new FontFamily("Consolas"),
                 FontWeight = isGuide ? FontWeights.SemiBold : FontWeights.Normal,
@@ -850,11 +867,132 @@ public partial class MainWindow : Window
             },
             IsHitTestVisible = false
         };
+    }
 
-        ApplyRotation(border, item.Angle, item.Center);
-        Canvas.SetLeft(border, dest.X);
-        Canvas.SetTop(border, dest.Y);
-        PreviewCanvas.Children.Add(border);
+    private static Rectangle CreateMissingPreviewObjectVisual(Lr2PreviewItem item, Rect dest)
+    {
+        return new Rectangle
+        {
+            Width = dest.Width,
+            Height = dest.Height,
+            Stroke = item.Object.Kind.Equals("#SRC_IMAGE", StringComparison.OrdinalIgnoreCase)
+                ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
+                : new SolidColorBrush(Color.FromRgb(250, 204, 21)),
+            StrokeThickness = 1,
+            StrokeDashArray = new DoubleCollection { 4, 3 },
+            Fill = new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)),
+            IsHitTestVisible = false
+        };
+    }
+
+    private void DrawPreviewItem(DrawingContext dc, Lr2PreviewItem item)
+    {
+        var dest = new Rect(item.Destination.X, item.Destination.Y, item.Destination.Width, item.Destination.Height);
+        if (dest.Width <= 0 || dest.Height <= 0) return;
+
+        if (item.Object.Kind.Equals("#SRC_TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            DrawTextPlaceholder(dc, item, dest);
+            return;
+        }
+
+        if (_bitmapFactory.TryCreateFrameBitmap(item, out var frameBitmap))
+        {
+            PushPreviewRenderState(dc, item, dest);
+            dc.DrawImage(frameBitmap, dest);
+            PopPreviewRenderState(dc, item);
+            return;
+        }
+
+        DrawMissingPreviewObject(dc, item, dest);
+    }
+
+    private void DrawTextPlaceholder(DrawingContext dc, Lr2PreviewItem item, Rect dest)
+    {
+        var placeholderColor = Color.FromRgb((byte)item.Red, (byte)item.Green, (byte)item.Blue);
+        var borderBrush = new SolidColorBrush(placeholderColor);
+        var isGuide = item.Object.SourceIndex is >= 9000 and < 9100;
+        var background = new SolidColorBrush(Color.FromArgb(isGuide ? (byte)92 : (byte)32, placeholderColor.R, placeholderColor.G, placeholderColor.B));
+        var label = ReadTextPlaceholderLabel(item.Object);
+        var fontSize = Math.Clamp(Math.Min(dest.Height * 0.18, dest.Width * 0.22), 9, 28);
+        var foreground = new SolidColorBrush(ReadContrastingTextColor(placeholderColor));
+        var formattedText = new FormattedText(
+            label,
+            CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            new Typeface(new FontFamily("Consolas"), FontStyles.Normal, isGuide ? FontWeights.SemiBold : FontWeights.Normal, FontStretches.Normal),
+            fontSize,
+            foreground,
+            VisualTreeHelper.GetDpi(this).PixelsPerDip)
+        {
+            MaxTextWidth = Math.Max(1, dest.Width - 8),
+            MaxTextHeight = Math.Max(1, dest.Height),
+            TextAlignment = TextAlignment.Center,
+            Trimming = TextTrimming.CharacterEllipsis
+        };
+
+        PushPreviewRenderState(dc, item, dest);
+        dc.DrawRectangle(background, new Pen(borderBrush, isGuide ? 2 : 1), dest);
+        dc.DrawText(formattedText, new Point(dest.X + 4, dest.Y + Math.Max(0, (dest.Height - formattedText.Height) * 0.5)));
+        PopPreviewRenderState(dc, item);
+    }
+
+    private static void DrawMissingPreviewObject(DrawingContext dc, Lr2PreviewItem item, Rect dest)
+    {
+        var strokeColor = item.Object.Kind.Equals("#SRC_IMAGE", StringComparison.OrdinalIgnoreCase)
+            ? Color.FromRgb(56, 189, 248)
+            : Color.FromRgb(250, 204, 21);
+        var pen = new Pen(new SolidColorBrush(strokeColor), 1)
+        {
+            DashStyle = new DashStyle(new double[] { 4, 3 }, 0)
+        };
+
+        PushPreviewRenderState(dc, item, dest);
+        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)), pen, dest);
+        PopPreviewRenderState(dc, item);
+    }
+
+    private static void PushPreviewRenderState(DrawingContext dc, Lr2PreviewItem item, Rect dest)
+    {
+        if (Math.Abs(item.Opacity - 1.0) > 0.001)
+        {
+            dc.PushOpacity(item.Opacity);
+        }
+
+        if (Math.Abs(item.Angle) > 0.001)
+        {
+            var center = CenterToPoint(item.Center, dest);
+            dc.PushTransform(new RotateTransform(item.Angle, center.X, center.Y));
+        }
+    }
+
+    private static void PopPreviewRenderState(DrawingContext dc, Lr2PreviewItem item)
+    {
+        if (Math.Abs(item.Angle) > 0.001)
+        {
+            dc.Pop();
+        }
+
+        if (Math.Abs(item.Opacity - 1.0) > 0.001)
+        {
+            dc.Pop();
+        }
+    }
+
+    private static Point CenterToPoint(int center, Rect dest)
+    {
+        return center switch
+        {
+            1 => new Point(dest.Left, dest.Bottom),
+            2 => new Point(dest.Left + dest.Width * 0.5, dest.Bottom),
+            3 => new Point(dest.Right, dest.Bottom),
+            4 => new Point(dest.Left, dest.Top + dest.Height * 0.5),
+            6 => new Point(dest.Right, dest.Top + dest.Height * 0.5),
+            7 => new Point(dest.Left, dest.Top),
+            8 => new Point(dest.Left + dest.Width * 0.5, dest.Top),
+            9 => new Point(dest.Right, dest.Top),
+            _ => new Point(dest.Left + dest.Width * 0.5, dest.Top + dest.Height * 0.5)
+        };
     }
 
     private static string ReadTextPlaceholderLabel(SkinObjectView skinObject)
@@ -928,16 +1066,23 @@ public partial class MainWindow : Window
 
         _previewDragLastDx = dx;
         _previewDragLastDy = dy;
-        if (MoveSelectedPreviewObjectTo(_previewDragStartX + dx, _previewDragStartY + dy))
-        {
-            e.Handled = true;
-        }
+        MoveSelectedPreviewVisualTo(_previewDragStartX + dx, _previewDragStartY + dy);
+        e.Handled = true;
     }
 
     private void PreviewCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (!_draggingPreviewObject) return;
+
+        var finalX = _previewDragStartX + _previewDragLastDx;
+        var finalY = _previewDragStartY + _previewDragLastDy;
+        var moved = _previewDragLastDx != 0 || _previewDragLastDy != 0;
         ClearPreviewDrag();
+        if (moved)
+        {
+            MoveSelectedPreviewObjectTo(finalX, finalY);
+        }
+
         e.Handled = true;
     }
 
@@ -1003,6 +1148,30 @@ public partial class MainWindow : Window
             ? "Preview edit mode enabled. Drag or use arrow keys to move by 1px. Press L for read-only."
             : "Preview read-only mode enabled. Press L for edit mode.");
     }
+
+    private void MoveSelectedPreviewVisualTo(int x, int y)
+    {
+        if (_selectedPreviewItem is not null)
+        {
+            var dest = _selectedPreviewItem.Destination;
+            _selectedPreviewItem = _selectedPreviewItem with { Destination = new PreviewRect(x, y, dest.Width, dest.Height) };
+        }
+
+        if (_selectedPreviewVisual is not null)
+        {
+            Canvas.SetLeft(_selectedPreviewVisual, x);
+            Canvas.SetTop(_selectedPreviewVisual, y);
+        }
+
+        if (_selectedPreviewAdorner is not null)
+        {
+            Canvas.SetLeft(_selectedPreviewAdorner, x);
+            Canvas.SetTop(_selectedPreviewAdorner, y);
+        }
+
+        SetStatus($"Moving preview object #{_selectedPreviewObjectId} to x={x}, y={y}. Release mouse to write.");
+    }
+
     private void BeginPreviewDrag(Lr2PreviewItem item, Point point)
     {
         ClearPreviewDrag();
@@ -1086,9 +1255,10 @@ public partial class MainWindow : Window
             return false;
         }
 
-        RefreshDocumentFromEditor(item.Id);
-        ObjectsGrid.SelectedItem = _document?.Objects.FirstOrDefault(candidate => candidate.Id == item.Id);
-        RenderPreview();
+        MoveSelectedPreviewVisualTo(x, y);
+        ObjectsGrid.Items.Refresh();
+        ObjectsGrid.SelectedItem = item;
+        UpdatePreviewSelectionPanel();
         SetStatus($"Moved preview object #{item.Id} to x={x}, y={y} ({(item.IsEditableInMain ? "main" : "include")}).");
         return true;
     }
@@ -1153,6 +1323,7 @@ public partial class MainWindow : Window
         };
 
         ApplyRotation(outline, item.Angle, item.Center);
+        _selectedPreviewAdorner = outline;
         Canvas.SetLeft(outline, dest.X);
         Canvas.SetTop(outline, dest.Y);
         PreviewCanvas.Children.Add(outline);
