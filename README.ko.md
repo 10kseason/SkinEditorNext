@@ -14,6 +14,9 @@ SkinEditorNext는 LR2 `.lr2skin` 파일을 위한 WPF 편집기입니다. 원본
 - 왼쪽 패널에서 선택한 `#IMAGE` 에셋의 미리보기, 원본 라인, 경로, 이미지 크기를 확인할 수 있습니다.
 - 이미지 로딩, 커스텀 옵션, 기본 타이머 모드, 보간, crop/div/cycle 프레임, alpha/RGB, angle, blend, sort order를 반영한 LR2 오브젝트 프리뷰를 제공합니다.
 - 오른쪽 오버레이에서 선택한 프리뷰 오브젝트의 파일, 라인, 이미지 슬롯, SRC/DST 값, 실제 이미지 경로, 썸네일을 확인할 수 있습니다.
+- 프리뷰 옆에서 main 스킨과 불러온 include/CSV 파일을 함께 편집하고, 편집 중 실시간으로 프리뷰를 갱신할 수 있습니다.
+- 프리뷰 크기는 `#RESOLUTION`을 우선 사용하고, 없으면 `#INFORMATION`의 x/y 값을 사용합니다.
+- read-only mode에서는 프리뷰를 드래그해서 이동하고, 마우스 휠 또는 `-`/`=` 키로 확대/축소할 수 있습니다.
 - `L` 키로 프리뷰 read-only/edit mode를 전환합니다.
 - edit mode에서는 방향키로 1px 이동하거나 마우스로 드래그해서 위치를 바꿀 수 있습니다. main 파일과 include 파일 오브젝트 모두 자기 파일에 반영됩니다.
 - Help 탭에서 `skinHelper.txt` 명령 도움말과 `skinObjGroup.txt` 오브젝트 그룹을 확인할 수 있습니다.

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text;
 using System.IO;
 using SkinEditorNext.Models;
@@ -17,7 +16,11 @@ public sealed class Lr2SkinParser
         return ParseMainText(path, text, encoding);
     }
 
-    public Lr2SkinDocument ParseMainText(string path, string text, Encoding encoding)
+    public Lr2SkinDocument ParseMainText(
+        string path,
+        string text,
+        Encoding encoding,
+        IReadOnlyDictionary<string, string>? sourceTextOverrides = null)
     {
         var document = new Lr2SkinDocument
         {
@@ -27,7 +30,8 @@ public sealed class Lr2SkinParser
         };
 
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        ParseText(document, path, document.MainText, true, 0, visited);
+        var normalizedOverrides = NormalizeSourceTextOverrides(sourceTextOverrides);
+        ParseText(document, path, document.MainText, true, 0, visited, normalizedOverrides);
         BuildObjects(document);
         return document;
     }
@@ -93,15 +97,28 @@ public sealed class Lr2SkinParser
         return string.Join(Environment.NewLine, lines);
     }
 
+    public static string ReplaceLine(string text, int lineNumber, string replacement)
+    {
+        var lines = SplitLines(NormalizeLineEndings(text)).ToList();
+        if (lineNumber <= 0 || lineNumber > lines.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(lineNumber), $"Line {lineNumber} is outside the current text.");
+        }
+
+        lines[lineNumber - 1] = replacement;
+        return string.Join(Environment.NewLine, lines);
+    }
+
     private void ParseText(
         Lr2SkinDocument document,
         string sourcePath,
         string text,
         bool isMainFile,
         int depth,
-        HashSet<string> visited)
+        HashSet<string> visited,
+        IReadOnlyDictionary<string, string>? sourceTextOverrides)
     {
-        var fullPath = Path.GetFullPath(sourcePath);
+        var fullPath = NormalizeSourcePath(sourcePath);
         if (!visited.Add(fullPath))
         {
             document.Diagnostics.Add($"Include cycle skipped: {sourcePath}");
@@ -130,10 +147,12 @@ public sealed class Lr2SkinParser
             if (IsCommand(fields[0], "#INFORMATION"))
             {
                 document.Header = ParseHeader(fields);
+                ApplyHeaderResolutionFallback(document);
             }
             else if (IsCommand(fields[0], "#RESOLUTION"))
             {
                 document.Resolution = ParseResolution(fields, document.Diagnostics);
+                document.HasResolutionCommand = true;
             }
             else if (IsCommand(fields[0], "#CUSTOMFILE") && fields.Count >= 4)
             {
@@ -143,25 +162,44 @@ public sealed class Lr2SkinParser
             {
                 var includeRawPath = fields.Count > 1 ? fields[1] : string.Empty;
                 AddLr2LoadPathCompatibilityDiagnostic(document, sourcePath, sourceLine, "#INCLUDE", includeRawPath);
-                var includePath = ResolvePath(sourcePath, includeRawPath, document.CustomFileRules);
-                if (includePath is null)
+                var includePaths = ResolveIncludePaths(sourcePath, includeRawPath, document.CustomFileRules);
+                if (includePaths.Count == 0)
                 {
-                    document.Diagnostics.Add($"{Path.GetFileName(sourcePath)}:{sourceLine} include path is empty.");
-                }
-                else if (!File.Exists(includePath))
-                {
-                    document.Diagnostics.Add($"{Path.GetFileName(sourcePath)}:{sourceLine} include not found: {includePath}");
+                    var attemptedPath = ResolvePath(sourcePath, includeRawPath, document.CustomFileRules);
+                    document.Diagnostics.Add(attemptedPath is null
+                        ? $"{Path.GetFileName(sourcePath)}:{sourceLine} include path is empty."
+                        : $"{Path.GetFileName(sourcePath)}:{sourceLine} include not found: {attemptedPath}");
                 }
                 else
                 {
-                    var includeBytes = File.ReadAllBytes(includePath);
-                    var includeEncoding = DetectEncoding(includeBytes);
-                    ParseText(document, includePath, includeEncoding.GetString(includeBytes), false, depth + 1, visited);
+                    foreach (var includePath in includePaths)
+                    {
+                        if (sourceTextOverrides is not null &&
+                            sourceTextOverrides.TryGetValue(NormalizeSourcePath(includePath), out var includeTextOverride))
+                        {
+                            ParseText(document, includePath, includeTextOverride, false, depth + 1, visited, sourceTextOverrides);
+                        }
+                        else
+                        {
+                            var includeBytes = File.ReadAllBytes(includePath);
+                            var includeEncoding = DetectEncoding(includeBytes);
+                            ParseText(document, includePath, includeEncoding.GetString(includeBytes), false, depth + 1, visited, sourceTextOverrides);
+                        }
+                    }
                 }
             }
         }
 
         visited.Remove(fullPath);
+    }
+
+    private static void ApplyHeaderResolutionFallback(Lr2SkinDocument document)
+    {
+        if (document.HasResolutionCommand) return;
+        if (document.Header.TargetWidth <= 0 || document.Header.TargetHeight <= 0) return;
+
+        // LR2 skins may omit #RESOLUTION and store the preview canvas size in #INFORMATION x,y.
+        document.Resolution = new ResolutionInfo(document.Header.TargetWidth, document.Header.TargetHeight);
     }
 
     private static ResolutionInfo ParseResolution(IReadOnlyList<string> fields, ICollection<string> diagnostics)
@@ -405,6 +443,7 @@ public sealed class Lr2SkinParser
 
         if (target.Frames.Count == 0)
         {
+            target.DstFile = line.SourcePath;
             target.DstLine = line.SourceLine;
             target.IsEditableInMain = target.IsEditableInMain && line.IsMainFile;
             target.DestLoop = CsvUtil.IntAt(line.Fields, 16);
@@ -595,6 +634,89 @@ public sealed class Lr2SkinParser
 
         return false;
     }
+    private static Dictionary<string, string>? NormalizeSourceTextOverrides(IReadOnlyDictionary<string, string>? sourceTextOverrides)
+    {
+        if (sourceTextOverrides is null || sourceTextOverrides.Count == 0)
+        {
+            return null;
+        }
+
+        var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in sourceTextOverrides)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key)) continue;
+            normalized[NormalizeSourcePath(pair.Key)] = pair.Value;
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeSourcePath(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return path;
+        }
+    }
+
+    private static IReadOnlyList<string> ResolveIncludePaths(string sourcePath, string rawPath, IReadOnlyList<CustomFileRule>? customFileRules)
+    {
+        var resolvedPath = ResolvePath(sourcePath, rawPath, customFileRules);
+        if (resolvedPath is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (!ContainsPathWildcard(resolvedPath))
+        {
+            if (File.Exists(resolvedPath))
+            {
+                return [resolvedPath];
+            }
+
+            var commonCsvFallback = ResolveCommonCsvIncludeFallback(resolvedPath);
+            return commonCsvFallback is not null ? [commonCsvFallback] : Array.Empty<string>();
+        }
+
+        var directory = Path.GetDirectoryName(resolvedPath);
+        var pattern = Path.GetFileName(resolvedPath);
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(pattern) || !Directory.Exists(directory))
+        {
+            return Array.Empty<string>();
+        }
+
+        return Directory.EnumerateFiles(directory, pattern)
+            .OrderBy(candidate => candidate, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? ResolveCommonCsvIncludeFallback(string resolvedPath)
+    {
+        var directory = Path.GetDirectoryName(resolvedPath);
+        var fileName = Path.GetFileName(resolvedPath);
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        var modeDirectory = new DirectoryInfo(directory);
+        var csvDirectory = modeDirectory.Parent;
+        if (csvDirectory is null || !csvDirectory.Name.Equals("csv", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var fallback = Path.Combine(csvDirectory.FullName, "common", fileName);
+        return File.Exists(fallback) ? fallback : null;
+    }
+    private static bool ContainsPathWildcard(string path)
+    {
+        return path.Contains('*') || path.Contains('?');
+    }
     private static string? ResolvePath(string sourcePath, string rawPath, IReadOnlyList<CustomFileRule>? customFileRules = null)
     {
         if (string.IsNullOrWhiteSpace(rawPath)) return null;
@@ -653,7 +775,13 @@ public sealed class Lr2SkinParser
             var candidateRoot = Path.Combine(dir.FullName, "LR2files");
             if (Directory.Exists(candidateRoot))
             {
-                return Path.GetFullPath(Path.Combine(dir.FullName, normalized));
+                var candidate = Path.GetFullPath(Path.Combine(dir.FullName, normalized));
+                if (PathReferenceExists(candidate))
+                {
+                    return candidate;
+                }
+
+                return ResolveFromCurrentThemeAlias(sourceDirectory, dir.FullName, normalized) ?? candidate;
             }
 
             dir = dir.Parent;
@@ -662,6 +790,65 @@ public sealed class Lr2SkinParser
         return null;
     }
 
+    private static string? ResolveFromCurrentThemeAlias(string sourceDirectory, string lr2RootParent, string normalizedPath)
+    {
+        var parts = normalizedPath.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 4 ||
+            !parts[0].Equals("LR2files", StringComparison.OrdinalIgnoreCase) ||
+            !parts[1].Equals("Theme", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var currentTheme = FindCurrentThemeName(sourceDirectory);
+        if (string.IsNullOrWhiteSpace(currentTheme) || parts[2].Equals(currentTheme, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        parts[2] = currentTheme;
+        var candidate = Path.GetFullPath(Path.Combine(lr2RootParent, Path.Combine(parts)));
+        return PathReferenceExists(candidate) ? candidate : null;
+    }
+
+    private static string? FindCurrentThemeName(string sourceDirectory)
+    {
+        var dir = new DirectoryInfo(sourceDirectory);
+        while (dir.Parent is not null)
+        {
+            if (dir.Parent.Name.Equals("Theme", StringComparison.OrdinalIgnoreCase) &&
+                dir.Parent.Parent?.Name.Equals("LR2files", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return dir.Name;
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
+    }
+
+    private static bool PathReferenceExists(string path)
+    {
+        try
+        {
+            if (ContainsPathWildcard(path))
+            {
+                var directory = Path.GetDirectoryName(path);
+                var pattern = Path.GetFileName(path);
+                return !string.IsNullOrWhiteSpace(directory) &&
+                       !string.IsNullOrWhiteSpace(pattern) &&
+                       Directory.Exists(directory) &&
+                       Directory.EnumerateFiles(directory, pattern).Any();
+            }
+
+            return File.Exists(path) || Directory.Exists(path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
     private static string NormalizeLr2RootRelativePath(string path)
     {
         var normalized = path.Replace('/', Path.DirectorySeparatorChar).Trim();
@@ -722,20 +909,7 @@ public sealed class Lr2SkinParser
 
     private static void RegisterCodePagesProviderIfPresent()
     {
-        try
-        {
-            var assembly = Assembly.Load("System.Text.Encoding.CodePages");
-            var providerType = assembly.GetType("System.Text.CodePagesEncodingProvider");
-            var instance = providerType?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
-            if (instance is EncodingProvider provider)
-            {
-                Encoding.RegisterProvider(provider);
-            }
-        }
-        catch
-        {
-            // The parser still works for ASCII command syntax and UTF-8 without this optional provider.
-        }
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
 
     private static bool IsCommand(string value, string expected)

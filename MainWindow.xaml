@@ -415,7 +415,7 @@
                                  AcceptsTab="True"
                                  VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas"
+                                 FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
                                  FontSize="13"
                                  TextChanged="CodeEditor_TextChanged"/>
                     </TabItem>
@@ -493,7 +493,7 @@
                                      MaxHeight="140"
                                      BorderBrush="#E5E7EB"
                                      BorderThickness="0,1,0,0"
-                                     FontFamily="Consolas"
+                                     FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
                                      FontSize="13"/>
                         </Grid>
                     </TabItem>
@@ -541,6 +541,11 @@
                                         <Button Content="Refresh"
                                                 Click="RefreshPreview_Click"
                                                 MinWidth="82"/>
+                                        <TextBlock x:Name="PreviewZoomText"
+                                                   Text="Zoom 100%"
+                                                   Foreground="#D1D5DB"
+                                                   VerticalAlignment="Center"
+                                                   Margin="10,0,0,0"/>
                                     </StackPanel>
                                     <TextBlock Text="LR2-style simulated frame"
                                                Foreground="#9CA3AF"
@@ -548,46 +553,118 @@
                                                TextAlignment="Right"/>
                                 </DockPanel>
                             </Border>
-                            <Grid Grid.Row="1">
-                                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                                    <Canvas x:Name="PreviewCanvas"
-                                            Background="#0B1020"
-                                            Focusable="True"
-                                            MouseLeftButtonDown="PreviewCanvas_MouseLeftButtonDown"
-                                            MouseMove="PreviewCanvas_MouseMove"
-                                            MouseLeftButtonUp="PreviewCanvas_MouseLeftButtonUp"
-                                            KeyDown="PreviewCanvas_KeyDown"/>
-                                </ScrollViewer>
-                                <TextBlock x:Name="PreviewOverlay"
-                                           VerticalAlignment="Top"
-                                           HorizontalAlignment="Left"
-                                           Margin="12"
-                                           Foreground="#E5E7EB"
-                                           Background="#99000000"
-                                           Padding="8,4"
-                                           Focusable="False"
-                                           IsHitTestVisible="False"/>
-                                <Border x:Name="PreviewSelectionPanel"
-                                        HorizontalAlignment="Right"
+                            <Grid Grid.Row="1" Background="#0B1020">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="560"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="420"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Border x:Name="PreviewCodePanel"
+                                        Grid.Column="0"
                                         VerticalAlignment="Stretch"
-                                        Width="340"
+                                        Margin="12"
+                                        Background="#EE0F172A"
+                                        BorderBrush="#4B5563"
+                                        BorderThickness="1"
+                                        Padding="10"
+                                        Focusable="False">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                                            <TextBlock Text="Code / CSV"
+                                                       Foreground="#F9FAFB"
+                                                       FontWeight="SemiBold"
+                                                       DockPanel.Dock="Left"/>
+                                            <TextBlock x:Name="PreviewCodeStatusText"
+                                                       Foreground="#9CA3AF"
+                                                       TextAlignment="Right"/>
+                                        </DockPanel>
+                                        <TabControl x:Name="PreviewCodeTabs"
+                                                    Grid.Row="1"
+                                                    SelectionChanged="PreviewCodeTabs_SelectionChanged"
+                                                    Background="#111827"
+                                                    BorderBrush="#374151"/>
+                                        <UniformGrid Grid.Row="2" Columns="2" Margin="0,8,0,0">
+                                            <Button Content="Save All"
+                                                    Click="Save_Click"
+                                                    MinHeight="28"
+                                                    Margin="0,0,4,0"/>
+                                            <Button Content="Reload Tabs"
+                                                    Click="ReloadPreviewCodeTabs_Click"
+                                                    MinHeight="28"
+                                                    Margin="4,0,0,0"/>
+                                        </UniformGrid>
+                                    </Grid>
+                                </Border>
+
+                                <Grid Grid.Column="1" Margin="8,12" ClipToBounds="True">
+                                    <ScrollViewer x:Name="PreviewScrollViewer"
+                                                  HorizontalScrollBarVisibility="Auto"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  Background="#0B1020"
+                                                  Focusable="False"
+                                                  SizeChanged="PreviewViewport_SizeChanged"
+                                                  PreviewMouseWheel="PreviewScrollViewer_PreviewMouseWheel">
+                                        <Grid x:Name="PreviewSurface"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center">
+                                            <Grid.LayoutTransform>
+                                                <ScaleTransform x:Name="PreviewCanvasScale" ScaleX="1" ScaleY="1"/>
+                                            </Grid.LayoutTransform>
+                                            <Canvas x:Name="PreviewCanvas"
+                                                    Background="#0B1020"
+                                                    Focusable="True"
+                                                    MouseLeftButtonDown="PreviewCanvas_MouseLeftButtonDown"
+                                                    MouseMove="PreviewCanvas_MouseMove"
+                                                    MouseLeftButtonUp="PreviewCanvas_MouseLeftButtonUp"
+                                                    KeyDown="PreviewCanvas_KeyDown"/>
+                                        </Grid>
+                                    </ScrollViewer>
+                                    <TextBlock x:Name="PreviewOverlay"
+                                               VerticalAlignment="Top"
+                                               HorizontalAlignment="Left"
+                                               Margin="12"
+                                               Foreground="#E5E7EB"
+                                               Background="#99000000"
+                                               Padding="8,4"
+                                               Focusable="False"
+                                               IsHitTestVisible="False"/>
+                                </Grid>
+
+                                <Border x:Name="PreviewSelectionPanel"
+                                        Grid.Column="2"
+                                        VerticalAlignment="Stretch"
                                         Margin="0,12,12,12"
                                         Background="#DD111827"
                                         BorderBrush="#4B5563"
                                         BorderThickness="1"
                                         Padding="10"
-                                        Focusable="False"
-                                        IsHitTestVisible="False">
+                                        Focusable="False">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="104"/>
-                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="96"/>
+                                            <RowDefinition Height="126"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="74"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="74"/>
+                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-                                        <TextBlock Text="Selection"
-                                                   Foreground="#F9FAFB"
-                                                   FontWeight="SemiBold"
-                                                   Margin="0,0,0,8"/>
+                                        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                                            <TextBlock Text="Selection"
+                                                       Foreground="#F9FAFB"
+                                                       FontWeight="SemiBold"
+                                                       DockPanel.Dock="Left"/>
+                                            <TextBlock x:Name="PreviewCsvStatusText"
+                                                       Foreground="#9CA3AF"
+                                                       TextAlignment="Right"/>
+                                        </DockPanel>
                                         <Border Grid.Row="1"
                                                 Background="#66111827"
                                                 BorderBrush="#374151"
@@ -610,7 +687,6 @@
                                                  Grid.Row="2"
                                                  IsReadOnly="True"
                                                  Focusable="False"
-                                                 IsHitTestVisible="False"
                                                  AcceptsReturn="True"
                                                  TextWrapping="Wrap"
                                                  VerticalScrollBarVisibility="Auto"
@@ -618,12 +694,55 @@
                                                  Background="#00111827"
                                                  BorderBrush="#374151"
                                                  Foreground="#E5E7EB"
-                                                 FontFamily="Consolas"
+                                                 FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
                                                  FontSize="12"/>
+                                        <TextBlock Grid.Row="3"
+                                                   Text="SRC CSV"
+                                                   Foreground="#F9FAFB"
+                                                   FontWeight="SemiBold"
+                                                   Margin="0,8,0,4"/>
+                                        <TextBox x:Name="PreviewSourceCsvBox"
+                                                 Grid.Row="4"
+                                                 AcceptsReturn="False"
+                                                 TextWrapping="NoWrap"
+                                                 VerticalScrollBarVisibility="Disabled"
+                                                 HorizontalScrollBarVisibility="Auto"
+                                                 Background="#F9FAFB"
+                                                 BorderBrush="#4B5563"
+                                                 Foreground="#111827"
+                                                 FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
+                                                 FontSize="12"/>
+                                        <TextBlock Grid.Row="5"
+                                                   Text="DST CSV"
+                                                   Foreground="#F9FAFB"
+                                                   FontWeight="SemiBold"
+                                                   Margin="0,8,0,4"/>
+                                        <TextBox x:Name="PreviewDestinationCsvBox"
+                                                 Grid.Row="6"
+                                                 AcceptsReturn="False"
+                                                 TextWrapping="NoWrap"
+                                                 VerticalScrollBarVisibility="Disabled"
+                                                 HorizontalScrollBarVisibility="Auto"
+                                                 Background="#F9FAFB"
+                                                 BorderBrush="#4B5563"
+                                                 Foreground="#111827"
+                                                 FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
+                                                 FontSize="12"/>
+                                        <UniformGrid Grid.Row="7" Columns="2" Margin="0,8,0,0">
+                                            <Button x:Name="ApplyPreviewCsvButton"
+                                                    Content="Apply CSV"
+                                                    Click="ApplyPreviewCsv_Click"
+                                                    MinHeight="28"
+                                                    Margin="0,0,4,0"/>
+                                            <Button x:Name="ResetPreviewCsvButton"
+                                                    Content="Reset"
+                                                    Click="ResetPreviewCsv_Click"
+                                                    MinHeight="28"
+                                                    Margin="4,0,0,0"/>
+                                        </UniformGrid>
                                     </Grid>
                                 </Border>
-                            </Grid>
-                        </Grid>
+                            </Grid>                        </Grid>
                     </TabItem>
                     <TabItem Header="Diagnostics">
                         <TextBox x:Name="DiagnosticsBox"
@@ -631,7 +750,7 @@
                                  AcceptsReturn="True"
                                  VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas"
+                                 FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
                                  FontSize="13"/>
                     </TabItem>
                 </TabControl>

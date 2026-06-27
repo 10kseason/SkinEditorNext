@@ -19,4 +19,5 @@ public sealed class Lr2SkinDocument
     public HashSet<int> ActiveOptions { get; } = [];
     public SkinHeaderInfo Header { get; set; } = SkinHeaderInfo.Empty;
     public ResolutionInfo Resolution { get; set; } = ResolutionInfo.Default;
+    internal bool HasResolutionCommand { get; set; }
 }

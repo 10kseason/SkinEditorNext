@@ -8,6 +8,7 @@ public sealed class SkinObjectView
     public string ImagePath { get; init; } = string.Empty;
     public string SourceFile { get; init; } = string.Empty;
     public int SrcLine { get; init; }
+    public string DstFile { get; set; } = string.Empty;
     public int DstLine { get; set; }
     public bool IsEditableInMain { get; set; }
     public int SourceIndex { get; init; }

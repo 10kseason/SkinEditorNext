@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using SkinEditorNext.Models;
 using SkinEditorNext.Services;
@@ -16,6 +17,9 @@ namespace SkinEditorNext;
 
 public partial class MainWindow : Window
 {
+    private const double PreviewZoomStep = 1.1;
+    private const double PreviewMinZoom = 0.25;
+    private const double PreviewMaxZoom = 8.0;
     private readonly Lr2SkinParser _parser = new();
     private readonly Lr2PreviewEvaluator _previewEvaluator = new();
     private readonly Lr2BitmapFactory _bitmapFactory = new();
@@ -25,8 +29,11 @@ public partial class MainWindow : Window
     private readonly List<SkinHelpEntry> _skinHelpRows = new();
     private readonly List<SkinImportEntry> _skinImportEntries = new();
     private readonly List<Lr2PreviewItem> _previewItems = new();
+    private readonly List<PreviewCodeDocument> _previewCodeDocuments = new();
+    private readonly DispatcherTimer _previewCodeRefreshTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private Lr2SkinDocument? _document;
     private bool _loadingEditor;
+    private bool _loadingPreviewCodeEditors;
     private bool _syncingPreviewTime;
     private bool _dirty;
     private int? _selectedPreviewObjectId;
@@ -40,10 +47,18 @@ public partial class MainWindow : Window
     private int _previewDragStartY;
     private int _previewDragLastDx;
     private int _previewDragLastDy;
-
+    private double _previewZoom = 1.0;
+    private double _previewFitScale = 1.0;
+    private bool _panningPreview;
+    private bool _previewPanMoved;
+    private Point _previewPanStartPoint;
+    private Point _previewPanStartCanvasPoint;
+    private double _previewPanStartHorizontalOffset;
+    private double _previewPanStartVerticalOffset;
     public MainWindow()
     {
         InitializeComponent();
+        _previewCodeRefreshTimer.Tick += PreviewCodeRefreshTimer_Tick;
         LoadSkinHelp();
         RefreshLr2ThemeImports();
         SetEmptyState();
@@ -69,12 +84,13 @@ public partial class MainWindow : Window
 
         try
         {
-            var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             var text = Lr2SkinWriter.CreateNewSkin(dialog.Settings);
             File.WriteAllText(saveDialog.FileName, text, encoding);
             _bitmapFactory.Clear();
             _document = _parser.ParseMainText(saveDialog.FileName, text, encoding);
             SetEditorText(text, markDirty: false);
+            ResetPreviewZoom();
             SelectCurrentSkinHelpMode();
             UpdateDocumentViews();
             RenderPreview();
@@ -358,6 +374,48 @@ public partial class MainWindow : Window
         SetStatus($"Applied object geometry for #{item.Id} ({(item.IsEditableInMain ? "main" : "include")}).");
     }
 
+    private void ApplyPreviewCsv_Click(object sender, RoutedEventArgs e)
+    {
+        if (_document is null || _selectedPreviewObjectId is null)
+        {
+            SetStatus("Select a preview object first.");
+            return;
+        }
+
+        var item = _document.Objects.FirstOrDefault(candidate => candidate.Id == _selectedPreviewObjectId.Value);
+        if (item is null)
+        {
+            SetStatus("Selected preview object is no longer available.");
+            return;
+        }
+
+        if (!TryReadPreviewCsvLine(PreviewSourceCsvBox, "#SRC_", "SRC CSV", out var sourceCsv))
+        {
+            return;
+        }
+
+        string? destinationCsv = null;
+        if (item.DstLine > 0 && !TryReadPreviewCsvLine(PreviewDestinationCsvBox, "#DST_", "DST CSV", out destinationCsv))
+        {
+            return;
+        }
+
+        if (!ApplyPreviewCsvLines(item, sourceCsv, destinationCsv))
+        {
+            return;
+        }
+
+        RefreshDocumentFromEditor(item.Id);
+        RenderPreview();
+        SetStatus($"Applied CSV for preview object #{item.Id}.");
+    }
+
+    private void ResetPreviewCsv_Click(object sender, RoutedEventArgs e)
+    {
+        UpdatePreviewSelectionPanel();
+        SetStatus("Reset preview CSV editor.");
+    }
+
     private void AddImage_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetDocumentDirectory(out var directory)) return;
@@ -588,6 +646,8 @@ public partial class MainWindow : Window
     {
         if (_loadingEditor) return;
         _dirty = true;
+        SyncPreviewMainDocumentFromCodeEditor();
+        SchedulePreviewCodeRefresh();
         UpdateTitle();
     }
 
@@ -620,9 +680,12 @@ public partial class MainWindow : Window
     {
         try
         {
+            _previewCodeRefreshTimer.Stop();
+            _previewCodeDocuments.Clear();
             _bitmapFactory.Clear();
             _document = _parser.Load(path);
             SetEditorText(_document.MainText, markDirty: false);
+            ResetPreviewZoom();
             SelectCurrentSkinHelpMode();
             UpdateDocumentViews();
             RenderPreview();
@@ -640,13 +703,42 @@ public partial class MainWindow : Window
     {
         try
         {
+            _previewCodeRefreshTimer.Stop();
             var encoding = _document?.Encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-            File.WriteAllText(path, CodeEditor.Text, encoding);
+            var mainText = ReadMainEditorText();
+            File.WriteAllText(path, mainText, encoding);
+
+            var savedIncludes = 0;
+            foreach (var document in _previewCodeDocuments.Where(document => !document.IsMain && document.IsDirty))
+            {
+                File.WriteAllText(document.Path, ReadPreviewCodeDocumentText(document), document.Encoding);
+                document.IsDirty = false;
+                savedIncludes++;
+            }
+
+            if (CodeEditor.Text != mainText)
+            {
+                SetEditorText(mainText, markDirty: false);
+            }
+
+            foreach (var document in _previewCodeDocuments)
+            {
+                if (document.IsMain)
+                {
+                    document.Path = path;
+                }
+
+                document.IsDirty = false;
+                UpdatePreviewCodeTabHeader(document);
+            }
+
             _dirty = false;
-            _document = _parser.ParseMainText(path, CodeEditor.Text, encoding);
+            _document = _parser.ParseMainText(path, mainText, encoding, ReadPreviewSourceTextOverrides());
             UpdateDocumentViews();
             RenderPreview();
-            SetStatus($"Saved {IOPath.GetFileName(path)}.");
+            SetStatus(savedIncludes == 0
+                ? $"Saved {IOPath.GetFileName(path)}."
+                : $"Saved {IOPath.GetFileName(path)} and {savedIncludes:N0} include file(s).");
         }
         catch (Exception ex)
         {
@@ -654,7 +746,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RefreshDocumentFromEditor(int? selectedObjectId = null)
+    private void RefreshDocumentFromEditor(int? selectedObjectId = null, bool rebuildPreviewCodeTabs = true)
     {
         var path = _document?.MainPath;
         if (string.IsNullOrWhiteSpace(path))
@@ -663,11 +755,11 @@ public partial class MainWindow : Window
         }
 
         var encoding = _document?.Encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        _document = _parser.ParseMainText(path, CodeEditor.Text, encoding);
-        UpdateDocumentViews(selectedObjectId);
+        _document = _parser.ParseMainText(path, CodeEditor.Text, encoding, ReadPreviewSourceTextOverrides());
+        UpdateDocumentViews(selectedObjectId, rebuildPreviewCodeTabs);
     }
 
-    private void UpdateDocumentViews(int? selectedObjectId = null)
+    private void UpdateDocumentViews(int? selectedObjectId = null, bool rebuildPreviewCodeTabs = true)
     {
         if (_document is null)
         {
@@ -702,6 +794,14 @@ public partial class MainWindow : Window
 
         FooterText.Text = $"{_document.Lines.Count:N0} parsed lines, {_document.Objects.Count:N0} objects, resolution {_document.Resolution}";
         RefreshSkinHelpRows();
+        if (rebuildPreviewCodeTabs || !PreviewCodeSourceSetMatchesDocument())
+        {
+            BuildPreviewCodeTabs();
+        }
+        else
+        {
+            UpdatePreviewCodeStatus();
+        }
         UpdateTitle();
     }
 
@@ -714,6 +814,567 @@ public partial class MainWindow : Window
         UpdateTitle();
     }
 
+    private void PreviewCodeTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (PreviewCodeTabs.SelectedItem is TabItem { Tag: PreviewCodeDocument document })
+        {
+            UpdatePreviewCodeStatus(document);
+        }
+    }
+
+    private void ReloadPreviewCodeTabs_Click(object sender, RoutedEventArgs e)
+    {
+        BuildPreviewCodeTabs();
+        SetStatus("Reloaded preview code tabs.");
+    }
+
+    private void PreviewCodeEditor_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingPreviewCodeEditors || sender is not TextBox editor || editor.Tag is not PreviewCodeDocument document)
+        {
+            return;
+        }
+
+        document.Text = editor.Text;
+        document.IsDirty = true;
+        _dirty = true;
+
+        if (document.IsMain && CodeEditor.Text != document.Text)
+        {
+            _loadingEditor = true;
+            CodeEditor.Text = document.Text;
+            _loadingEditor = false;
+        }
+
+        UpdatePreviewCodeTabHeader(document);
+        UpdatePreviewCodeStatus(document);
+        SchedulePreviewCodeRefresh();
+        UpdateTitle();
+    }
+
+    private void PreviewCodeRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        _previewCodeRefreshTimer.Stop();
+        RefreshDocumentFromPreviewEditors();
+    }
+
+    private void SchedulePreviewCodeRefresh()
+    {
+        if (_document is null) return;
+        _previewCodeRefreshTimer.Stop();
+        _previewCodeRefreshTimer.Start();
+    }
+
+    private void RefreshDocumentFromPreviewEditors()
+    {
+        if (_document is null) return;
+
+        try
+        {
+            var selectedObjectId = _selectedPreviewObjectId;
+            var path = _document.MainPath;
+            var encoding = _document.Encoding;
+            _document = _parser.ParseMainText(path, CodeEditor.Text, encoding, ReadPreviewSourceTextOverrides());
+            var rebuildTabs = !PreviewCodeSourceSetMatchesDocument();
+            UpdateDocumentViews(selectedObjectId, rebuildTabs);
+            RenderPreview();
+            UpdatePreviewCodeStatus();
+        }
+        catch (Exception ex)
+        {
+            if (PreviewCodeStatusText is not null)
+            {
+                PreviewCodeStatusText.Text = "parse failed";
+            }
+
+            DiagnosticsBox.Text = ex.Message;
+        }
+    }
+
+    private void BuildPreviewCodeTabs()
+    {
+        if (PreviewCodeTabs is null)
+        {
+            return;
+        }
+
+        _previewCodeRefreshTimer.Stop();
+        var selectedPath = PreviewCodeTabs.SelectedItem is TabItem { Tag: PreviewCodeDocument selectedDocument }
+            ? selectedDocument.Path
+            : string.Empty;
+        var existingByPath = _previewCodeDocuments
+            .GroupBy(document => NormalizeComparablePath(document.Path), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var specs = ReadPreviewCodeDocumentSpecs();
+        _loadingPreviewCodeEditors = true;
+        _previewCodeDocuments.Clear();
+        PreviewCodeTabs.Items.Clear();
+
+        foreach (var spec in specs)
+        {
+            var document = CreatePreviewCodeDocument(spec, existingByPath);
+            _previewCodeDocuments.Add(document);
+            PreviewCodeTabs.Items.Add(CreatePreviewCodeTab(document));
+        }
+
+        _loadingPreviewCodeEditors = false;
+
+        var selectedIndex = 0;
+        if (!string.IsNullOrWhiteSpace(selectedPath))
+        {
+            var normalizedSelected = NormalizeComparablePath(selectedPath);
+            for (var i = 0; i < _previewCodeDocuments.Count; i++)
+            {
+                if (IsSamePath(_previewCodeDocuments[i].Path, normalizedSelected))
+                {
+                    selectedIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (PreviewCodeTabs.Items.Count > 0)
+        {
+            PreviewCodeTabs.SelectedIndex = Math.Clamp(selectedIndex, 0, PreviewCodeTabs.Items.Count - 1);
+        }
+
+        UpdatePreviewCodeStatus();
+    }
+
+    private IReadOnlyList<PreviewCodeDocumentSpec> ReadPreviewCodeDocumentSpecs()
+    {
+        if (_document is null)
+        {
+            return Array.Empty<PreviewCodeDocumentSpec>();
+        }
+
+        var specs = new List<PreviewCodeDocumentSpec>
+        {
+            new(_document.MainPath, IsMain: true)
+        };
+
+        foreach (var group in _document.Lines
+                     .Where(line => !line.IsMainFile && !string.IsNullOrWhiteSpace(line.SourcePath))
+                     .GroupBy(line => NormalizeComparablePath(line.SourcePath), StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(group => group.Min(line => line.DisplayLine)))
+        {
+            specs.Add(new(group.First().SourcePath, IsMain: false));
+        }
+
+        return specs;
+    }
+
+    private PreviewCodeDocument CreatePreviewCodeDocument(
+        PreviewCodeDocumentSpec spec,
+        IReadOnlyDictionary<string, PreviewCodeDocument> existingByPath)
+    {
+        var normalizedPath = NormalizeComparablePath(spec.Path);
+        if (existingByPath.TryGetValue(normalizedPath, out var existing))
+        {
+            return new PreviewCodeDocument
+            {
+                Path = spec.Path,
+                Encoding = spec.IsMain
+                    ? _document?.Encoding ?? existing.Encoding
+                    : existing.Encoding,
+                IsMain = spec.IsMain,
+                Text = ReadPreviewCodeDocumentText(existing),
+                IsDirty = existing.IsDirty
+            };
+        }
+
+        if (spec.IsMain)
+        {
+            return new PreviewCodeDocument
+            {
+                Path = spec.Path,
+                Encoding = _document?.Encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                IsMain = true,
+                Text = CodeEditor.Text
+            };
+        }
+
+        Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var text = string.Empty;
+        if (File.Exists(spec.Path))
+        {
+            var bytes = File.ReadAllBytes(spec.Path);
+            encoding = Lr2SkinParser.DetectEncoding(bytes);
+            text = encoding.GetString(bytes);
+        }
+
+        return new PreviewCodeDocument
+        {
+            Path = spec.Path,
+            Encoding = encoding,
+            IsMain = false,
+            Text = text
+        };
+    }
+
+    private TabItem CreatePreviewCodeTab(PreviewCodeDocument document)
+    {
+        var editor = new TextBox
+        {
+            AcceptsReturn = true,
+            AcceptsTab = true,
+            Text = document.Text,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = new FontFamily("Consolas, Yu Gothic UI, Meiryo, MS Gothic"),
+            FontSize = 12,
+            Background = new SolidColorBrush(Color.FromRgb(249, 250, 251)),
+            Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+            Tag = document
+        };
+        editor.TextChanged += PreviewCodeEditor_TextChanged;
+        document.Editor = editor;
+
+        return new TabItem
+        {
+            Header = CreatePreviewCodeTabHeader(document),
+            Content = editor,
+            Tag = document
+        };
+    }
+
+    private bool PreviewCodeSourceSetMatchesDocument()
+    {
+        var specs = ReadPreviewCodeDocumentSpecs();
+        if (specs.Count != _previewCodeDocuments.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < specs.Count; i++)
+        {
+            if (!IsSamePath(specs[i].Path, _previewCodeDocuments[i].Path))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private Dictionary<string, string> ReadPreviewSourceTextOverrides()
+    {
+        var overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var document in _previewCodeDocuments.Where(document => !document.IsMain))
+        {
+            overrides[NormalizeComparablePath(document.Path)] = ReadPreviewCodeDocumentText(document);
+        }
+
+        return overrides;
+    }
+
+    private string ReadMainEditorText()
+    {
+        var mainDocument = _previewCodeDocuments.FirstOrDefault(document => document.IsMain);
+        return mainDocument is null ? CodeEditor.Text : ReadPreviewCodeDocumentText(mainDocument);
+    }
+
+    private static string ReadPreviewCodeDocumentText(PreviewCodeDocument document)
+    {
+        return document.Editor?.Text ?? document.Text;
+    }
+
+    private void SyncPreviewMainDocumentFromCodeEditor()
+    {
+        var mainDocument = _previewCodeDocuments.FirstOrDefault(document => document.IsMain);
+        if (mainDocument is null)
+        {
+            return;
+        }
+
+        mainDocument.Text = CodeEditor.Text;
+        mainDocument.IsDirty = true;
+        if (mainDocument.Editor is not null && mainDocument.Editor.Text != CodeEditor.Text)
+        {
+            _loadingPreviewCodeEditors = true;
+            mainDocument.Editor.Text = CodeEditor.Text;
+            _loadingPreviewCodeEditors = false;
+        }
+
+        UpdatePreviewCodeTabHeader(mainDocument);
+        UpdatePreviewCodeStatus(mainDocument);
+    }
+
+    private bool ReplacePreviewCodeDocumentLine(PreviewCsvLineUpdate update)
+    {
+        var document = FindPreviewCodeDocument(update.Path);
+        if (document is null)
+        {
+            SetStatus($"Preview code tab not found: {update.Path}");
+            return false;
+        }
+
+        var updatedText = Lr2SkinParser.ReplaceLine(ReadPreviewCodeDocumentText(document), update.LineNumber, update.Csv);
+        document.Text = updatedText;
+        document.IsDirty = true;
+
+        if (document.IsMain)
+        {
+            SetEditorText(updatedText, markDirty: true);
+        }
+
+        if (document.Editor is not null && document.Editor.Text != updatedText)
+        {
+            _loadingPreviewCodeEditors = true;
+            document.Editor.Text = updatedText;
+            _loadingPreviewCodeEditors = false;
+        }
+
+        UpdatePreviewCodeTabHeader(document);
+        UpdatePreviewCodeStatus(document);
+        return true;
+    }
+
+    private PreviewCodeDocument? FindPreviewCodeDocument(string path)
+    {
+        return _previewCodeDocuments.FirstOrDefault(document => IsSamePath(document.Path, path));
+    }
+
+    private TextBlock CreatePreviewCodeTabHeader(PreviewCodeDocument document)
+    {
+        return new TextBlock { Text = FormatPreviewCodeTabHeader(document) };
+    }
+
+    private void UpdatePreviewCodeTabHeader(PreviewCodeDocument document)
+    {
+        if (PreviewCodeTabs is null) return;
+
+        foreach (TabItem item in PreviewCodeTabs.Items)
+        {
+            if (ReferenceEquals(item.Tag, document))
+            {
+                if (item.Header is TextBlock header)
+                {
+                    header.Text = FormatPreviewCodeTabHeader(document);
+                }
+                else
+                {
+                    item.Header = CreatePreviewCodeTabHeader(document);
+                }
+
+                return;
+            }
+        }
+    }
+
+    private void UpdatePreviewCodeStatus(PreviewCodeDocument? selectedDocument = null)
+    {
+        if (PreviewCodeStatusText is null) return;
+
+        if (_document is null)
+        {
+            PreviewCodeStatusText.Text = string.Empty;
+            return;
+        }
+
+        selectedDocument ??= PreviewCodeTabs?.SelectedItem is TabItem { Tag: PreviewCodeDocument document }
+            ? document
+            : _previewCodeDocuments.FirstOrDefault();
+        var csvCount = _previewCodeDocuments.Count(document => document.IsCsv);
+        var dirtyCount = _previewCodeDocuments.Count(document => document.IsDirty);
+        var selected = selectedDocument is null
+            ? string.Empty
+            : $" / {FormatPreviewCodeTabKind(selectedDocument)} / {selectedDocument.Encoding.WebName}";
+        var dirty = dirtyCount == 0 ? string.Empty : $" / {dirtyCount:N0} dirty";
+        PreviewCodeStatusText.Text = $"{ReadSkinTypeLabel(_document.Header.Type)} / {csvCount:N0} csv{selected}{dirty}";
+    }
+
+    private string FormatPreviewCodeTabHeader(PreviewCodeDocument document)
+    {
+        var dirty = document.IsDirty ? "*" : string.Empty;
+        return $"{dirty}{FormatPreviewCodeTabKind(document)} {FormatPreviewCodePathLabel(document.Path)}";
+    }
+
+    private static string FormatPreviewCodeTabKind(PreviewCodeDocument document)
+    {
+        if (document.IsMain) return "Main";
+        return document.IsCsv ? "CSV" : "Include";
+    }
+
+    private string FormatPreviewCodePathLabel(string path)
+    {
+        if (_document is not null && !string.IsNullOrWhiteSpace(_document.MainPath))
+        {
+            var directory = IOPath.GetDirectoryName(_document.MainPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                try
+                {
+                    var relative = IOPath.GetRelativePath(directory, path);
+                    if (!relative.StartsWith("..", StringComparison.Ordinal) && !IOPath.IsPathRooted(relative))
+                    {
+                        return relative.Replace('\\', '/');
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        return IOPath.GetFileName(path);
+    }
+
+    private static string ReadSkinTypeLabel(int type)
+    {
+        return type switch
+        {
+            0 => "7KEYS",
+            1 => "5KEYS",
+            2 => "14KEYS",
+            3 => "10KEYS",
+            4 => "9KEYS",
+            5 => "SELECT",
+            6 => "DECIDE",
+            7 => "RESULT",
+            8 => "KEYCONFIG",
+            9 => "SKINSELECT",
+            10 => "SOUNDSET",
+            11 => "THEME",
+            12 => "7KEYSBATTLE",
+            13 => "5KEYSBATTLE",
+            14 => "9KEYSBATTLE",
+            15 => "COURSERESULT",
+            16 => "OPENING",
+            17 => "MODESELECT",
+            18 => "MODEDECIDE",
+            19 => "COURSESELECT",
+            20 => "COURSEEDIT",
+            _ => $"TYPE {type}"
+        };
+    }
+    private void PreviewViewport_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdatePreviewZoomTransform();
+    }
+
+    private void PreviewScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        ChangePreviewZoom(e.Delta > 0 ? PreviewZoomStep : 1.0 / PreviewZoomStep, e.GetPosition(PreviewScrollViewer));
+        PreviewCanvas.Focus();
+        e.Handled = true;
+    }
+
+    private bool TryHandlePreviewZoomKey(Key key)
+    {
+        switch (key)
+        {
+            case Key.OemPlus:
+            case Key.Add:
+                ChangePreviewZoom(PreviewZoomStep, null);
+                return true;
+            case Key.OemMinus:
+            case Key.Subtract:
+                ChangePreviewZoom(1.0 / PreviewZoomStep, null);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void ChangePreviewZoom(double factor, Point? viewportPoint)
+    {
+        if (_document is null || factor <= 0)
+        {
+            return;
+        }
+
+        var oldScale = ReadPreviewActualScale();
+        var oldHorizontalOffset = PreviewScrollViewer.HorizontalOffset;
+        var oldVerticalOffset = PreviewScrollViewer.VerticalOffset;
+        var point = viewportPoint ?? ReadPreviewViewportCenter();
+
+        _previewZoom = Math.Clamp(_previewZoom * factor, PreviewMinZoom, PreviewMaxZoom);
+        UpdatePreviewZoomTransform();
+        var newScale = ReadPreviewActualScale();
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (oldScale <= 0) return;
+
+            var scaleRatio = newScale / oldScale;
+            PreviewScrollViewer.ScrollToHorizontalOffset((oldHorizontalOffset + point.X) * scaleRatio - point.X);
+            PreviewScrollViewer.ScrollToVerticalOffset((oldVerticalOffset + point.Y) * scaleRatio - point.Y);
+        }, DispatcherPriority.Loaded);
+
+        SetStatus($"Preview zoom {FormatPreviewZoomLabel()}.");
+    }
+
+    private Point ReadPreviewViewportCenter()
+    {
+        var width = PreviewScrollViewer.ViewportWidth > 0 ? PreviewScrollViewer.ViewportWidth : PreviewScrollViewer.ActualWidth;
+        var height = PreviewScrollViewer.ViewportHeight > 0 ? PreviewScrollViewer.ViewportHeight : PreviewScrollViewer.ActualHeight;
+        return new Point(Math.Max(0, width / 2.0), Math.Max(0, height / 2.0));
+    }
+
+    private void ResetPreviewZoom()
+    {
+        _previewZoom = 1.0;
+        UpdatePreviewZoomTransform();
+    }
+
+    private void UpdatePreviewZoomTransform()
+    {
+        if (PreviewCanvasScale is null || PreviewScrollViewer is null || PreviewCanvas is null)
+        {
+            return;
+        }
+
+        _previewFitScale = CalculatePreviewFitScale();
+        var scale = ReadPreviewActualScale();
+        PreviewCanvasScale.ScaleX = scale;
+        PreviewCanvasScale.ScaleY = scale;
+        UpdatePreviewZoomText();
+    }
+
+    private double CalculatePreviewFitScale()
+    {
+        if (PreviewCanvas.Width <= 0 || PreviewCanvas.Height <= 0)
+        {
+            return 1.0;
+        }
+
+        var viewportWidth = PreviewScrollViewer.ViewportWidth > 0 ? PreviewScrollViewer.ViewportWidth : PreviewScrollViewer.ActualWidth;
+        var viewportHeight = PreviewScrollViewer.ViewportHeight > 0 ? PreviewScrollViewer.ViewportHeight : PreviewScrollViewer.ActualHeight;
+        if (viewportWidth <= 0 || viewportHeight <= 0)
+        {
+            return 1.0;
+        }
+
+        var scale = Math.Min(viewportWidth / PreviewCanvas.Width, viewportHeight / PreviewCanvas.Height);
+        if (double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0)
+        {
+            return 1.0;
+        }
+
+        return Math.Min(1.0, scale);
+    }
+
+    private double ReadPreviewActualScale()
+    {
+        return Math.Max(0.01, _previewFitScale * _previewZoom);
+    }
+
+    private string FormatPreviewZoomLabel()
+    {
+        return $"Zoom {Math.Round(_previewZoom * 100):0}%";
+    }
+
+    private void UpdatePreviewZoomText()
+    {
+        if (PreviewZoomText is not null)
+        {
+            PreviewZoomText.Text = FormatPreviewZoomLabel();
+        }
+    }
     private void RenderPreview()
     {
         PreviewCanvas.Children.Clear();
@@ -727,6 +1388,8 @@ public partial class MainWindow : Window
             PreviewCanvas.Width = 640;
             PreviewCanvas.Height = 480;
             PreviewOverlay.Text = "Open a .lr2skin file.";
+            ResetPreviewZoom();
+            UpdatePreviewZoomTransform();
             ClearPreviewDrag();
             UpdatePreviewSelectionPanel();
             return;
@@ -743,7 +1406,8 @@ public partial class MainWindow : Window
 
         PreviewCanvas.Width = resolution.Width;
         PreviewCanvas.Height = resolution.Height;
-        PreviewOverlay.Text = $"{resolution.Width} x {resolution.Height} / {renderItems.Count:N0} visible / {_document.Objects.Count:N0} objects / {(int)clock.TimeMs} ms / {clock.ModeName} / {ReadPreviewEditModeLabel()}";
+        PreviewOverlay.Text = $"{resolution.Width} x {resolution.Height} / {renderItems.Count:N0} visible / {_document.Objects.Count:N0} objects / {(int)clock.TimeMs} ms / {clock.ModeName} / {ReadPreviewEditModeLabel()} / {FormatPreviewZoomLabel()}";
+        UpdatePreviewZoomTransform();
 
         AddPreviewSceneBitmap(renderItems, resolution, _selectedPreviewItem?.Object.Id);
 
@@ -855,7 +1519,7 @@ public partial class MainWindow : Window
             {
                 Text = ReadTextPlaceholderLabel(item.Object),
                 Foreground = new SolidColorBrush(ReadContrastingTextColor(placeholderColor)),
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Consolas, Yu Gothic UI, Meiryo, MS Gothic"),
                 FontWeight = isGuide ? FontWeights.SemiBold : FontWeights.Normal,
                 FontSize = Math.Clamp(Math.Min(dest.Height * 0.18, dest.Width * 0.22), 9, 28),
                 VerticalAlignment = VerticalAlignment.Center,
@@ -920,7 +1584,7 @@ public partial class MainWindow : Window
             label,
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface(new FontFamily("Consolas"), FontStyles.Normal, isGuide ? FontWeights.SemiBold : FontWeights.Normal, FontStretches.Normal),
+            new Typeface(new FontFamily("Consolas, Yu Gothic UI, Meiryo, MS Gothic"), FontStyles.Normal, isGuide ? FontWeights.SemiBold : FontWeights.Normal, FontStretches.Normal),
             fontSize,
             foreground,
             VisualTreeHelper.GetDpi(this).PixelsPerDip)
@@ -1023,12 +1687,10 @@ public partial class MainWindow : Window
         return luminance > 160 ? Color.FromRgb(17, 24, 39) : Color.FromRgb(229, 231, 235);
     }
 
-    private void PreviewCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private bool SelectPreviewItemAt(Point point, bool beginObjectDrag)
     {
-        if (_document is null) return;
+        if (_document is null) return false;
 
-        PreviewCanvas.Focus();
-        var point = e.GetPosition(PreviewCanvas);
         var item = FindPreviewItemAt(point);
         if (item is null)
         {
@@ -1037,20 +1699,47 @@ public partial class MainWindow : Window
             _selectedPreviewItem = null;
             RenderPreview();
             SetStatus($"No preview object at {FormatDouble(point.X)},{FormatDouble(point.Y)}.");
-            return;
+            return false;
         }
 
         _selectedPreviewObjectId = item.Object.Id;
         _selectedPreviewItem = item;
         ObjectsGrid.SelectedItem = _document.Objects.FirstOrDefault(candidate => candidate.Id == item.Object.Id);
-        BeginPreviewDrag(item, point);
+        if (beginObjectDrag)
+        {
+            BeginPreviewDrag(item, point);
+        }
+
         RenderPreview();
         SetStatus($"Selected preview object #{item.Object.Id} {item.Object.Kind} at {FormatPreviewRect(item.Destination)}.");
+        return true;
+    }
+
+    private void PreviewCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_document is null) return;
+
+        PreviewCanvas.Focus();
+        if (!_previewEditMode)
+        {
+            BeginPreviewPan(e);
+            e.Handled = true;
+            return;
+        }
+
+        SelectPreviewItemAt(e.GetPosition(PreviewCanvas), beginObjectDrag: true);
         e.Handled = true;
     }
 
     private void PreviewCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_panningPreview)
+        {
+            UpdatePreviewPan(e);
+            e.Handled = true;
+            return;
+        }
+
         if (!_draggingPreviewObject || e.LeftButton != MouseButtonState.Pressed)
         {
             return;
@@ -1072,6 +1761,20 @@ public partial class MainWindow : Window
 
     private void PreviewCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_panningPreview)
+        {
+            var shouldSelect = !_previewPanMoved;
+            var selectPoint = _previewPanStartCanvasPoint;
+            ClearPreviewPan();
+            if (shouldSelect)
+            {
+                SelectPreviewItemAt(selectPoint, beginObjectDrag: false);
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         if (!_draggingPreviewObject) return;
 
         var finalX = _previewDragStartX + _previewDragLastDx;
@@ -1088,7 +1791,19 @@ public partial class MainWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.L || !PreviewTab.IsSelected)
+        if (!PreviewTab.IsSelected || IsPreviewTextInputFocused())
+        {
+            return;
+        }
+
+        if (TryHandlePreviewZoomKey(e.Key))
+        {
+            PreviewCanvas.Focus();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key != Key.L)
         {
             return;
         }
@@ -1097,8 +1812,19 @@ public partial class MainWindow : Window
         PreviewCanvas.Focus();
         e.Handled = true;
     }
+
+    private static bool IsPreviewTextInputFocused()
+    {
+        return Keyboard.FocusedElement is TextBox or ComboBox;
+    }
     private void PreviewCanvas_KeyDown(object sender, KeyEventArgs e)
     {
+        if (TryHandlePreviewZoomKey(e.Key))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.L)
         {
             TogglePreviewEditMode();
@@ -1138,11 +1864,12 @@ public partial class MainWindow : Window
             e.Handled = true;
         }
     }
-
     private void TogglePreviewEditMode()
     {
         _previewEditMode = !_previewEditMode;
         ClearPreviewDrag();
+        ClearPreviewPan();
+        UpdatePreviewCursor();
         UpdatePreviewSelectionPanel();
         SetStatus(_previewEditMode
             ? "Preview edit mode enabled. Drag or use arrow keys to move by 1px. Press L for read-only."
@@ -1172,8 +1899,67 @@ public partial class MainWindow : Window
         SetStatus($"Moving preview object #{_selectedPreviewObjectId} to x={x}, y={y}. Release mouse to write.");
     }
 
+    private void BeginPreviewPan(MouseButtonEventArgs e)
+    {
+        ClearPreviewDrag();
+        ClearPreviewPan();
+        _panningPreview = true;
+        _previewPanMoved = false;
+        _previewPanStartPoint = e.GetPosition(PreviewScrollViewer);
+        _previewPanStartCanvasPoint = e.GetPosition(PreviewCanvas);
+        _previewPanStartHorizontalOffset = PreviewScrollViewer.HorizontalOffset;
+        _previewPanStartVerticalOffset = PreviewScrollViewer.VerticalOffset;
+        PreviewCanvas.CaptureMouse();
+        UpdatePreviewCursor();
+    }
+
+    private void UpdatePreviewPan(MouseEventArgs e)
+    {
+        if (!_panningPreview)
+        {
+            return;
+        }
+
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            ClearPreviewPan();
+            return;
+        }
+
+        var point = e.GetPosition(PreviewScrollViewer);
+        var dx = point.X - _previewPanStartPoint.X;
+        var dy = point.Y - _previewPanStartPoint.Y;
+        if (Math.Abs(dx) > 2 || Math.Abs(dy) > 2)
+        {
+            _previewPanMoved = true;
+        }
+
+        PreviewScrollViewer.ScrollToHorizontalOffset(_previewPanStartHorizontalOffset - dx);
+        PreviewScrollViewer.ScrollToVerticalOffset(_previewPanStartVerticalOffset - dy);
+    }
+
+    private void ClearPreviewPan()
+    {
+        _panningPreview = false;
+        _previewPanMoved = false;
+        if (PreviewCanvas.IsMouseCaptured && !_draggingPreviewObject)
+        {
+            PreviewCanvas.ReleaseMouseCapture();
+        }
+
+        UpdatePreviewCursor();
+    }
+
+    private void UpdatePreviewCursor()
+    {
+        if (PreviewCanvas is not null)
+        {
+            PreviewCanvas.Cursor = _previewEditMode ? Cursors.Cross : Cursors.SizeAll;
+        }
+    }
     private void BeginPreviewDrag(Lr2PreviewItem item, Point point)
     {
+        ClearPreviewPan();
         ClearPreviewDrag();
         if (!_previewEditMode)
         {
@@ -1196,10 +1982,12 @@ public partial class MainWindow : Window
         _draggingPreviewObject = false;
         _previewDragLastDx = 0;
         _previewDragLastDy = 0;
-        if (PreviewCanvas.IsMouseCaptured)
+        if (PreviewCanvas.IsMouseCaptured && !_panningPreview)
         {
             PreviewCanvas.ReleaseMouseCapture();
         }
+
+        UpdatePreviewCursor();
     }
 
     private bool MoveSelectedPreviewObjectBy(int dx, int dy)
@@ -1265,32 +2053,128 @@ public partial class MainWindow : Window
 
     private bool ApplyPreviewObjectGeometry(SkinObjectView item)
     {
-        if (item.IsEditableInMain)
+        try
         {
-            SetEditorText(Lr2SkinParser.UpdateObjectGeometry(CodeEditor.Text, item), markDirty: true);
-            return true;
+            var sourceCsv = ReadParsedLineText(item.SourceFile, item.SrcLine);
+            if (sourceCsv is null)
+            {
+                SetStatus($"SRC line not found: {item.SourceFile}:{item.SrcLine}");
+                return false;
+            }
+
+            var updatedSourceCsv = UpdatePreviewObjectSourceGeometryLine(sourceCsv, item);
+            string? updatedDestinationCsv = null;
+            if (item.DstLine > 0)
+            {
+                var destinationPath = ReadObjectDstFile(item);
+                var destinationCsv = ReadParsedLineText(destinationPath, item.DstLine);
+                if (destinationCsv is null)
+                {
+                    SetStatus($"DST line not found: {destinationPath}:{item.DstLine}");
+                    return false;
+                }
+
+                updatedDestinationCsv = UpdatePreviewObjectDestinationGeometryLine(destinationCsv, item);
+            }
+
+            return ApplyPreviewCsvLines(item, updatedSourceCsv, updatedDestinationCsv);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Geometry edit failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
+
+    private static string UpdatePreviewObjectSourceGeometryLine(string csv, SkinObjectView item)
+    {
+        var fields = CsvUtil.Split(csv);
+        if (fields.Count == 0 || !fields[0].StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Selected object SRC line is no longer a #SRC_ CSV row.");
+        }
+
+        CsvUtil.SetInt(fields, 3, item.SourceX);
+        CsvUtil.SetInt(fields, 4, item.SourceY);
+        CsvUtil.SetInt(fields, 5, item.SourceWidth);
+        CsvUtil.SetInt(fields, 6, item.SourceHeight);
+        return CsvUtil.Join(fields);
+    }
+
+    private static string UpdatePreviewObjectDestinationGeometryLine(string csv, SkinObjectView item)
+    {
+        var fields = CsvUtil.Split(csv);
+        if (fields.Count == 0 || !fields[0].StartsWith("#DST_", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Selected object DST line is no longer a #DST_ CSV row.");
+        }
+
+        CsvUtil.SetInt(fields, 3, item.DestX);
+        CsvUtil.SetInt(fields, 4, item.DestY);
+        CsvUtil.SetInt(fields, 5, item.DestWidth);
+        CsvUtil.SetInt(fields, 6, item.DestHeight);
+        return CsvUtil.Join(fields);
+    }
+
+    private bool ApplyPreviewCsvLines(SkinObjectView item, string sourceCsv, string? destinationCsv)
+    {
+        var updates = new List<PreviewCsvLineUpdate>
+        {
+            new(item.SourceFile, item.SrcLine, sourceCsv)
+        };
+
+        if (destinationCsv is not null && item.DstLine > 0)
+        {
+            updates.Add(new(ReadObjectDstFile(item), item.DstLine, destinationCsv));
         }
 
         try
         {
-            if (string.IsNullOrWhiteSpace(item.SourceFile) || !File.Exists(item.SourceFile))
+            foreach (var update in updates)
             {
-                SetStatus($"Include file not found: {item.SourceFile}");
-                return false;
+                if (!ReplacePreviewCodeDocumentLine(update))
+                {
+                    return false;
+                }
             }
 
-            var bytes = File.ReadAllBytes(item.SourceFile);
-            var encoding = Lr2SkinParser.DetectEncoding(bytes);
-            var includeText = encoding.GetString(bytes);
-            var updatedText = Lr2SkinParser.UpdateObjectGeometry(includeText, item);
-            File.WriteAllText(item.SourceFile, updatedText, encoding);
+            _dirty = true;
+            UpdateTitle();
             return true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Include edit failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.Message, "CSV edit failed", MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
+    }
+
+    private bool TryReadPreviewCsvLine(TextBox box, string expectedPrefix, string label, out string csv)
+    {
+        csv = box.Text.Trim();
+        if (string.IsNullOrWhiteSpace(csv))
+        {
+            SetStatus($"{label} is empty.");
+            box.Focus();
+            return false;
+        }
+
+        if (csv.Contains('\r') || csv.Contains('\n'))
+        {
+            SetStatus($"{label} must be a single CSV line.");
+            box.Focus();
+            return false;
+        }
+
+        var fields = CsvUtil.Split(csv);
+        if (fields.Count == 0 || !fields[0].Trim().StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus($"{label} must start with {expectedPrefix}.");
+            box.Focus();
+            return false;
+        }
+
+        return true;
     }
     private Lr2PreviewItem? FindPreviewItemAt(Point point)
     {
@@ -1336,6 +2220,7 @@ public partial class MainWindow : Window
         if (_document is null)
         {
             UpdatePreviewSelectionThumbnail(null, null);
+            UpdatePreviewCsvEditor(null);
             PreviewSelectionBox.Text = $"Mode: {ReadPreviewEditModeLabel()}\r\nOpen a .lr2skin file.";
             return;
         }
@@ -1343,6 +2228,7 @@ public partial class MainWindow : Window
         if (_selectedPreviewObjectId is null)
         {
             UpdatePreviewSelectionThumbnail(null, null);
+            UpdatePreviewCsvEditor(null);
             PreviewSelectionBox.Text = $"Mode: {ReadPreviewEditModeLabel()}\r\nNo preview object selected.";
             return;
         }
@@ -1351,12 +2237,57 @@ public partial class MainWindow : Window
         if (skinObject is null)
         {
             UpdatePreviewSelectionThumbnail(null, null);
+            UpdatePreviewCsvEditor(null);
             PreviewSelectionBox.Text = $"Object #{_selectedPreviewObjectId.Value} is no longer in the parsed skin.";
             return;
         }
 
         UpdatePreviewSelectionThumbnail(skinObject, _selectedPreviewItem);
+        UpdatePreviewCsvEditor(skinObject);
         PreviewSelectionBox.Text = FormatPreviewSelection(skinObject, _selectedPreviewItem);
+    }
+
+    private void UpdatePreviewCsvEditor(SkinObjectView? skinObject)
+    {
+        if (PreviewSourceCsvBox is null || PreviewDestinationCsvBox is null ||
+            ApplyPreviewCsvButton is null || ResetPreviewCsvButton is null || PreviewCsvStatusText is null)
+        {
+            return;
+        }
+
+        if (skinObject is null)
+        {
+            PreviewSourceCsvBox.Text = string.Empty;
+            PreviewDestinationCsvBox.Text = string.Empty;
+            PreviewSourceCsvBox.IsEnabled = false;
+            PreviewDestinationCsvBox.IsEnabled = false;
+            ApplyPreviewCsvButton.IsEnabled = false;
+            ResetPreviewCsvButton.IsEnabled = false;
+            PreviewCsvStatusText.Text = string.Empty;
+            return;
+        }
+
+        PreviewSourceCsvBox.Text = ReadParsedLineText(skinObject.SourceFile, skinObject.SrcLine) ?? string.Empty;
+        PreviewDestinationCsvBox.Text = skinObject.DstLine > 0
+            ? ReadParsedLineText(ReadObjectDstFile(skinObject), skinObject.DstLine) ?? string.Empty
+            : string.Empty;
+        PreviewSourceCsvBox.IsEnabled = true;
+        PreviewDestinationCsvBox.IsEnabled = skinObject.DstLine > 0;
+        ApplyPreviewCsvButton.IsEnabled = true;
+        ResetPreviewCsvButton.IsEnabled = true;
+        PreviewCsvStatusText.Text = skinObject.IsEditableInMain ? "main" : "include";
+    }
+
+    private string? ReadParsedLineText(string path, int lineNumber)
+    {
+        if (_document is null || string.IsNullOrWhiteSpace(path) || lineNumber <= 0)
+        {
+            return null;
+        }
+
+        return _document.Lines.FirstOrDefault(line =>
+            line.SourceLine == lineNumber &&
+            IsSamePath(line.SourcePath, path))?.RawText.Trim();
     }
 
     private void UpdatePreviewSelectionThumbnail(SkinObjectView? skinObject, Lr2PreviewItem? visibleItem)
@@ -1415,6 +2346,7 @@ public partial class MainWindow : Window
         builder.AppendLine($"Image: {FormatMissing(skinObject.ImagePath)}");
         builder.AppendLine($"Source file: {skinObject.SourceFile}");
         builder.AppendLine($"SRC line: {skinObject.SrcLine}");
+        builder.AppendLine($"DST file: {(skinObject.DstLine > 0 ? ReadObjectDstFile(skinObject) : "(none)")}");
         builder.AppendLine($"DST line: {(skinObject.DstLine > 0 ? skinObject.DstLine.ToString(CultureInfo.InvariantCulture) : "none")}");
         builder.AppendLine($"Editable: {(skinObject.IsEditableInMain ? "main file" : "include file")}");
         builder.AppendLine();
@@ -1474,6 +2406,35 @@ public partial class MainWindow : Window
     private static string FormatMissing(string value)
     {
         return string.IsNullOrWhiteSpace(value) ? "(none)" : value;
+    }
+
+    private bool IsMainDocumentPath(string path)
+    {
+        return _document is not null && IsSamePath(_document.MainPath, path);
+    }
+
+    private static string ReadObjectDstFile(SkinObjectView item)
+    {
+        return string.IsNullOrWhiteSpace(item.DstFile) ? item.SourceFile : item.DstFile;
+    }
+
+    private static bool IsSamePath(string left, string right)
+    {
+        return string.Equals(NormalizeComparablePath(left), NormalizeComparablePath(right), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeComparablePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+
+        try
+        {
+            return IOPath.GetFullPath(path);
+        }
+        catch
+        {
+            return path;
+        }
     }
 
     private static void ApplyRotation(FrameworkElement element, double angle, int center)
@@ -2014,6 +2975,8 @@ public partial class MainWindow : Window
         PreviewCanvas.Width = 640;
         PreviewCanvas.Height = 480;
         PreviewOverlay.Text = "Open a .lr2skin file.";
+        ResetPreviewZoom();
+        UpdatePreviewCursor();
         _selectedPreviewObjectId = null;
         _selectedPreviewItem = null;
         ClearPreviewDrag();
@@ -2021,6 +2984,16 @@ public partial class MainWindow : Window
         PreviewTimeBox.Text = "1000";
         PreviewTimeSlider.Value = 1000;
         PreviewModeBox.SelectedIndex = 0;
+        _previewCodeRefreshTimer.Stop();
+        _previewCodeDocuments.Clear();
+        if (PreviewCodeTabs is not null)
+        {
+            PreviewCodeTabs.Items.Clear();
+        }
+        if (PreviewCodeStatusText is not null)
+        {
+            PreviewCodeStatusText.Text = string.Empty;
+        }
         UpdateTitle();
     }
 
@@ -2038,4 +3011,17 @@ public partial class MainWindow : Window
     }
 
     private sealed record SkinImportEntry(string FullPath, string RelativePath, string DisplayName);
+    private sealed record PreviewCodeDocumentSpec(string Path, bool IsMain);
+    private sealed record PreviewCsvLineUpdate(string Path, int LineNumber, string Csv);
+
+    private sealed class PreviewCodeDocument
+    {
+        public string Path { get; set; } = string.Empty;
+        public Encoding Encoding { get; init; } = Encoding.UTF8;
+        public bool IsMain { get; init; }
+        public string Text { get; set; } = string.Empty;
+        public bool IsDirty { get; set; }
+        public TextBox? Editor { get; set; }
+        public bool IsCsv => IOPath.GetExtension(Path).Equals(".csv", StringComparison.OrdinalIgnoreCase);
+    }
 }

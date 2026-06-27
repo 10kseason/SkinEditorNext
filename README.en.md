@@ -14,6 +14,9 @@ SkinEditorNext is a WPF editor for LR2 `.lr2skin` files. It focuses on safe insp
 - Preview the selected `#IMAGE` asset in the left panel with source line, path, and image size.
 - Preview LR2 objects with image loading, custom options, basic timer modes, interpolation, crop/div/cycle frame selection, alpha/RGB, angle, blend, and sort order handling.
 - Inspect the selected preview object in the right overlay, including source file, line, image slot, SRC/DST data, resolved image path, and a thumbnail.
+- Edit the main skin and loaded include/CSV files beside the preview, with live preview refresh while editing.
+- Size the preview from `#RESOLUTION`, or from `#INFORMATION` x/y when a skin omits `#RESOLUTION`.
+- In read-only mode, drag the preview to pan; zoom with the mouse wheel or `-`/`=` keys.
 - Toggle preview read-only/edit mode with `L`.
 - In edit mode, move the selected preview object by 1 px with arrow keys or by dragging it with the mouse. Main skin and include-file objects are both written back to their owning file.
 - Show LR2 command help from `skinHelper.txt` and object groups from `skinObjGroup.txt` in the Help tab.
