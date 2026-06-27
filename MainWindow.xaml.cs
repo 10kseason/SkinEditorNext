@@ -27,6 +27,9 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, SkinHelpEntry> _skinHelpTemplatesByCommand = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _skinHelpGroupByCommand = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SkinHelpEntry> _skinHelpRows = new();
+    private readonly List<string> _skinHelpCommandChoices = new();
+    private readonly List<SkinHelpFieldEdit> _skinHelpEasyFields = new();
+    private readonly List<SkinIfBlockView> _skinIfRows = new();
     private readonly List<SkinImportEntry> _skinImportEntries = new();
     private readonly List<Lr2PreviewItem> _previewItems = new();
     private readonly List<PreviewCodeDocument> _previewCodeDocuments = new();
@@ -55,6 +58,11 @@ public partial class MainWindow : Window
     private Point _previewPanStartCanvasPoint;
     private double _previewPanStartHorizontalOffset;
     private double _previewPanStartVerticalOffset;
+    private bool _applyingSkinHelpEdit;
+    private bool _loadingSkinHelpEasyEditor;
+
+    public IReadOnlyList<string> SkinHelpCommandChoices => _skinHelpCommandChoices;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -663,9 +671,97 @@ public partial class MainWindow : Window
 
     private void SkinHelpGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        SkinHelpDetailBox.Text = SkinHelpGrid.SelectedItem is SkinHelpEntry entry ? entry.Detail : string.Empty;
+        var entry = SkinHelpGrid.SelectedItem as SkinHelpEntry;
+        SkinHelpDetailBox.Text = entry?.Detail ?? string.Empty;
+        LoadSkinHelpEasyEditor(entry);
     }
 
+    private void SkinHelpGrid_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+    {
+        if (e.Row.Item is not SkinHelpEntry entry || !entry.CanEdit || !IsEditableSkinHelpColumn(e.Column.Header?.ToString()))
+        {
+            e.Cancel = true;
+        }
+    }
+
+    private void SkinHelpGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction != DataGridEditAction.Commit || e.Row.Item is not SkinHelpEntry entry)
+        {
+            return;
+        }
+
+        var editedColumn = e.Column.Header?.ToString() ?? string.Empty;
+        Dispatcher.BeginInvoke(new Action(() => ApplySkinHelpEntryEdit(entry, editedColumn)), DispatcherPriority.Background);
+    }
+
+    private static bool IsEditableSkinHelpColumn(string? header)
+    {
+        return header is "Command" or "Fields" or "CSV";
+    }
+
+    private void SkinIfTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is SkinIfBlockView node)
+        {
+            SkinHelpDetailBox.Text = node.Detail;
+        }
+    }
+
+    private void SkinHelpEasyCommandBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loadingSkinHelpEasyEditor)
+        {
+            RefreshSkinHelpEasyFieldsForCommand();
+        }
+    }
+
+    private void SkinHelpEasyCommandBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!_loadingSkinHelpEasyEditor)
+        {
+            RefreshSkinHelpEasyFieldsForCommand();
+        }
+    }
+
+    private void SkinHelpEasyApply_Click(object sender, RoutedEventArgs e)
+    {
+        if (SkinHelpGrid.SelectedItem is not SkinHelpEntry entry)
+        {
+            SetStatus("Select a helper row first.");
+            return;
+        }
+
+        if (!TryBuildSkinHelpEasyCsv(out var csv))
+        {
+            return;
+        }
+
+        entry.Command = NormalizeSkinHelpCommand(ReadSkinHelpEasyCommand());
+        entry.Arguments = FormatSkinHelpArguments(CsvUtil.Split(csv));
+        entry.RawLine = csv;
+        ApplySkinHelpEntryEdit(entry, "CSV");
+    }
+
+    private void SkinHelpEasyInsert_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBuildSkinHelpEasyCsv(out var csv))
+        {
+            return;
+        }
+
+        CodeEditor.Focus();
+        var insertion = csv + Environment.NewLine;
+        var insertionStart = CodeEditor.SelectionStart;
+        CodeEditor.SelectedText = insertion;
+        CodeEditor.CaretIndex = insertionStart + insertion.Length;
+        SetStatus($"Inserted {NormalizeSkinHelpCommand(ReadSkinHelpEasyCommand())} from easy helper.");
+    }
+
+    private void SkinHelpEasyReset_Click(object sender, RoutedEventArgs e)
+    {
+        LoadSkinHelpEasyEditor(SkinHelpGrid.SelectedItem as SkinHelpEntry);
+    }
     private void SkinHelpGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         InsertSelectedSkinHelpLine();
@@ -794,6 +890,7 @@ public partial class MainWindow : Window
 
         FooterText.Text = $"{_document.Lines.Count:N0} parsed lines, {_document.Objects.Count:N0} objects, resolution {_document.Resolution}";
         RefreshSkinHelpRows();
+        RefreshSkinIfRows();
         if (rebuildPreviewCodeTabs || !PreviewCodeSourceSetMatchesDocument())
         {
             BuildPreviewCodeTabs();
@@ -2667,6 +2764,7 @@ public partial class MainWindow : Window
         _skinHelpTemplates.Clear();
         _skinHelpTemplatesByCommand.Clear();
         _skinHelpGroupByCommand.Clear();
+        _skinHelpCommandChoices.Clear();
 
         var groupPath = FindSkinObjGroupPath();
         if (groupPath is not null)
@@ -2685,20 +2783,40 @@ public partial class MainWindow : Window
 
         try
         {
+            var lineNumber = 0;
             foreach (var line in File.ReadLines(path, Encoding.UTF8))
             {
+                lineNumber++;
                 var rawLine = line.Trim();
                 if (rawLine.Length == 0) continue;
 
                 var fields = CsvUtil.Split(rawLine);
                 if (fields.Count == 0 || string.IsNullOrWhiteSpace(fields[0])) continue;
 
-                var command = fields[0].Trim();
-                var arguments = string.Join(", ", fields.Skip(1).Select(field => field.Trim()));
-                var entry = new SkinHelpEntry("Helper", string.Empty, ReadSkinHelpGroup(command), command, string.Empty, arguments, rawLine, isTemplate: true, rawLine);
+                var command = NormalizeSkinHelpCommand(fields[0]);
+                var arguments = FormatSkinHelpArguments(fields);
+                var entry = new SkinHelpEntry(
+                    path,
+                    lineNumber,
+                    "Helper",
+                    lineNumber.ToString(CultureInfo.InvariantCulture),
+                    ReadSkinHelpGroup(command),
+                    command,
+                    string.Empty,
+                    arguments,
+                    rawLine,
+                    isTemplate: true,
+                    FormatSkinHelpTemplateDetail(path, lineNumber, fields, rawLine));
                 _skinHelpTemplates.Add(entry);
                 _skinHelpTemplatesByCommand[command] = entry;
+
+                if (!_skinHelpCommandChoices.Any(existing => string.Equals(existing, command, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _skinHelpCommandChoices.Add(command);
+                }
             }
+
+            _skinHelpCommandChoices.Sort(StringComparer.OrdinalIgnoreCase);
         }
         catch (Exception ex)
         {
@@ -2730,10 +2848,12 @@ public partial class MainWindow : Window
                 source += " (include)";
             }
 
-            var arguments = FormatSkinHelpArguments(line, template);
+            var arguments = FormatSkinHelpArguments(line.Fields);
             var position = FormatSkinHelpPosition(line);
             var detail = FormatSkinHelpDetail(line, template, arguments, position);
             _skinHelpRows.Add(new SkinHelpEntry(
+                line.SourcePath,
+                line.SourceLine,
                 source,
                 line.SourceLine.ToString(CultureInfo.InvariantCulture),
                 ReadSkinHelpGroup(line.Command),
@@ -2803,6 +2923,308 @@ public partial class MainWindow : Window
         SetStatus($"Inserted {template.Command} template.");
     }
 
+    private void LoadSkinHelpEasyEditor(SkinHelpEntry? entry)
+    {
+        if (SkinHelpEasyCommandBox is null || SkinHelpEasyFieldsGrid is null || SkinHelpEasySummaryText is null)
+        {
+            return;
+        }
+
+        _loadingSkinHelpEasyEditor = true;
+        try
+        {
+            _skinHelpEasyFields.Clear();
+            SkinHelpEasyFieldsGrid.ItemsSource = null;
+
+            if (entry is null)
+            {
+                SkinHelpEasySummaryText.Text = "왼쪽에서 줄을 고르세요.";
+                SkinHelpEasyCommandBox.Text = string.Empty;
+                SkinHelpEasyCsvBox.Text = string.Empty;
+                SetSkinHelpEasyButtonsEnabled(false);
+                return;
+            }
+
+            SkinHelpEasySummaryText.Text = entry.IsTemplate
+                ? $"템플릿 {entry.Line}번"
+                : $"{entry.Source} {entry.Line}번";
+            SkinHelpEasyCommandBox.Text = entry.Command;
+            LoadSkinHelpEasyFields(entry.Command, CsvUtil.Split(entry.RawLine), preserveValues: null);
+            SkinHelpEasyCsvBox.Text = entry.RawLine;
+            SetSkinHelpEasyButtonsEnabled(true);
+        }
+        finally
+        {
+            _loadingSkinHelpEasyEditor = false;
+        }
+    }
+
+    private void RefreshSkinHelpEasyFieldsForCommand()
+    {
+        if (SkinHelpEasyCommandBox is null || SkinHelpEasyFieldsGrid is null)
+        {
+            return;
+        }
+
+        var values = _skinHelpEasyFields.ToDictionary(field => field.Index, field => field.Value);
+        var command = NormalizeSkinHelpCommand(ReadSkinHelpEasyCommand());
+        var fields = _skinHelpTemplatesByCommand.TryGetValue(command, out var template)
+            ? CsvUtil.Split(template.RawLine)
+            : new List<string> { command };
+        LoadSkinHelpEasyFields(command, fields, values);
+        TryBuildSkinHelpEasyCsv(out _);
+    }
+
+    private void LoadSkinHelpEasyFields(string command, IReadOnlyList<string> sourceFields, IReadOnlyDictionary<int, string>? preserveValues)
+    {
+        _skinHelpEasyFields.Clear();
+        var templateFields = ReadSkinHelpTemplateFields(command, sourceFields);
+        var maxIndex = Math.Max(sourceFields.Count, templateFields.Count) - 1;
+        if (preserveValues is not null && preserveValues.Count > 0)
+        {
+            maxIndex = Math.Max(maxIndex, preserveValues.Keys.Max());
+        }
+
+        for (var index = 1; index <= maxIndex; index++)
+        {
+            var templateName = ReadSkinHelpFieldName(templateFields, index);
+            var value = preserveValues is not null && preserveValues.TryGetValue(index, out var preserved)
+                ? preserved
+                : ReadCsvField(sourceFields, index);
+            _skinHelpEasyFields.Add(new SkinHelpFieldEdit
+            {
+                Index = index,
+                Name = FormatSkinHelpEasyFieldName(templateName, index),
+                Value = value,
+                Hint = FormatSkinHelpEasyFieldHint(templateName, index)
+            });
+        }
+
+        SkinHelpEasyFieldsGrid.ItemsSource = null;
+        SkinHelpEasyFieldsGrid.ItemsSource = _skinHelpEasyFields;
+    }
+
+    private IReadOnlyList<string> ReadSkinHelpTemplateFields(string command, IReadOnlyList<string> fallbackFields)
+    {
+        var normalized = NormalizeSkinHelpCommand(command);
+        return _skinHelpTemplatesByCommand.TryGetValue(normalized, out var template)
+            ? CsvUtil.Split(template.RawLine)
+            : fallbackFields;
+    }
+
+    private bool TryBuildSkinHelpEasyCsv(out string csv)
+    {
+        csv = string.Empty;
+        var command = NormalizeSkinHelpCommand(ReadSkinHelpEasyCommand());
+        if (string.IsNullOrWhiteSpace(command) || command == "#")
+        {
+            SetStatus("Choose a helper command first.");
+            return false;
+        }
+
+        var fields = new List<string> { command };
+        fields.AddRange(_skinHelpEasyFields
+            .OrderBy(field => field.Index)
+            .Select(field => field.Value.Trim()));
+        csv = CsvUtil.Join(fields);
+        SkinHelpEasyCsvBox.Text = csv;
+        return true;
+    }
+
+    private string ReadSkinHelpEasyCommand()
+    {
+        return SkinHelpEasyCommandBox?.Text.Trim() ?? string.Empty;
+    }
+
+    private void SetSkinHelpEasyButtonsEnabled(bool enabled)
+    {
+        SkinHelpEasyApplyButton.IsEnabled = enabled;
+        SkinHelpEasyInsertButton.IsEnabled = enabled;
+        SkinHelpEasyResetButton.IsEnabled = enabled;
+    }
+
+    private static string FormatSkinHelpEasyFieldName(string templateName, int index)
+    {
+        var name = string.IsNullOrWhiteSpace(templateName) ? $"field{index}" : templateName.Trim();
+        var friendly = ReadSkinHelpEasyKoreanName(name);
+        return string.IsNullOrWhiteSpace(friendly) ? name : $"{name} - {friendly}";
+    }
+
+    private static string FormatSkinHelpEasyFieldHint(string templateName, int index)
+    {
+        var name = string.IsNullOrWhiteSpace(templateName) ? $"field{index}" : templateName.Trim();
+        var friendly = ReadSkinHelpEasyKoreanName(name);
+        return string.IsNullOrWhiteSpace(friendly)
+            ? $"Field {index}. Keep the old value if unsure."
+            : $"{friendly}. Keep the old value if unsure.";
+    }
+
+    private static string ReadSkinHelpEasyKoreanName(string templateName)
+    {
+        var key = templateName.Trim().TrimStart('$').Trim('(', ')').ToLowerInvariant();
+        return key switch
+        {
+            "x" => "X position",
+            "y" => "Y position",
+            "w" => "width",
+            "h" => "height",
+            "time" => "time",
+            "gr" => "image slot",
+            "font" => "font slot",
+            "a" => "opacity",
+            "r" => "red",
+            "g" => "green",
+            "b" => "blue",
+            "blend" => "blend mode",
+            "filter" => "filter",
+            "angle" => "rotation",
+            "center" => "rotation center",
+            "loop" => "loop",
+            "timer" => "timer",
+            "cycle" => "animation cycle",
+            "div_x" => "horizontal pieces",
+            "div_y" => "vertical pieces",
+            "align" => "alignment",
+            "keta" => "digits",
+            "title" => "title",
+            "maker" => "author",
+            "path" => "file path",
+            "default" => "default value",
+            "type" => "type",
+            "thumbnail" => "thumbnail",
+            "acc" => "movement curve",
+            "size" => "text size",
+            "edit" => "editable flag",
+            "panel" => "panel",
+            "range" => "range",
+            "disable" => "disabled value",
+            "muki" => "direction",
+            "null" => "usually blank",
+            _ when key.StartsWith("op", StringComparison.OrdinalIgnoreCase) => "condition option",
+            _ => string.Empty
+        };
+    }
+
+    private void ApplySkinHelpEntryEdit(SkinHelpEntry entry, string editedColumn)
+    {
+        if (_applyingSkinHelpEdit || !entry.CanEdit)
+        {
+            return;
+        }
+
+        _applyingSkinHelpEdit = true;
+        try
+        {
+            if (!TryBuildSkinHelpCsv(entry, editedColumn, out var csv))
+            {
+                ApplySkinHelpFilter();
+                return;
+            }
+
+            if (entry.IsTemplate)
+            {
+                ApplySkinHelpTemplateEdit(entry, csv);
+            }
+            else
+            {
+                ApplySkinHelpDocumentEdit(entry, csv);
+            }
+        }
+        finally
+        {
+            _applyingSkinHelpEdit = false;
+        }
+    }
+    private bool TryBuildSkinHelpCsv(SkinHelpEntry entry, string editedColumn, out string csv)
+    {
+        csv = editedColumn.Equals("CSV", StringComparison.OrdinalIgnoreCase)
+            ? entry.RawLine.Trim()
+            : BuildSkinHelpCsv(entry.Command, entry.Arguments);
+
+        if (string.IsNullOrWhiteSpace(csv))
+        {
+            SetStatus("Helper CSV is empty.");
+            return false;
+        }
+
+        if (csv.Contains('\r') || csv.Contains('\n'))
+        {
+            SetStatus("Helper CSV must be a single line.");
+            return false;
+        }
+
+        var fields = CsvUtil.Split(csv);
+        if (fields.Count == 0 || string.IsNullOrWhiteSpace(fields[0]) || !fields[0].Trim().StartsWith('#'))
+        {
+            SetStatus("Helper command must start with #.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string BuildSkinHelpCsv(string command, string arguments)
+    {
+        var fields = new List<string> { NormalizeSkinHelpCommand(command) };
+        if (!string.IsNullOrWhiteSpace(arguments))
+        {
+            fields.AddRange(CsvUtil.Split(arguments).Select(field => field.Trim()));
+        }
+
+        return CsvUtil.Join(fields);
+    }
+
+    private static string NormalizeSkinHelpCommand(string command)
+    {
+        var normalized = command.Trim();
+        if (normalized.Length == 0) return normalized;
+        return normalized.StartsWith('#') ? normalized : "#" + normalized;
+    }
+
+    private void ApplySkinHelpTemplateEdit(SkinHelpEntry entry, string csv)
+    {
+        try
+        {
+            var text = File.ReadAllText(entry.SourcePath, Encoding.UTF8);
+            var updatedText = Lr2SkinParser.ReplaceLine(text, entry.SourceLineNumber, csv);
+            File.WriteAllText(entry.SourcePath, updatedText, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            LoadSkinHelp();
+            RefreshSkinHelpRows();
+            SetStatus($"Updated skinHelper.txt line {entry.SourceLineNumber:N0}.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Helper template edit failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ApplySkinHelpDocumentEdit(SkinHelpEntry entry, string csv)
+    {
+        if (_document is null)
+        {
+            SetStatus("Open a .lr2skin file before editing current skin rows.");
+            return;
+        }
+
+        try
+        {
+            if (!ReplacePreviewCodeDocumentLine(new PreviewCsvLineUpdate(entry.SourcePath, entry.SourceLineNumber, csv)))
+            {
+                return;
+            }
+
+            _dirty = true;
+            UpdateTitle();
+            RefreshDocumentFromEditor(_selectedPreviewObjectId);
+            RenderPreview();
+            SetStatus($"Updated {IOPath.GetFileName(entry.SourcePath)}:{entry.SourceLineNumber:N0}.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Helper row edit failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void SelectCurrentSkinHelpMode()
     {
         if (SkinHelpModeBox is not null && SkinHelpModeBox.SelectedIndex != 0)
@@ -2810,6 +3232,120 @@ public partial class MainWindow : Window
             SkinHelpModeBox.SelectedIndex = 0;
         }
     }
+
+    private void RefreshSkinIfRows()
+    {
+        _skinIfRows.Clear();
+        if (SkinIfTree is null || SkinIfSummaryText is null)
+        {
+            return;
+        }
+
+        SkinIfTree.ItemsSource = null;
+        if (_document is null)
+        {
+            SkinIfSummaryText.Text = "Open a .lr2skin file to inspect IF blocks.";
+            SkinIfExpander.IsEnabled = false;
+            return;
+        }
+
+        var stack = new Stack<SkinIfBlockView>();
+        var commandCount = 0;
+        foreach (var line in _document.Lines.Where(line => line.Fields.Count > 0))
+        {
+            if (!IsSkinIfCommand(line.Command))
+            {
+                continue;
+            }
+
+            commandCount++;
+            var node = CreateSkinIfNode(line);
+            if (line.Command.Equals("#IF", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSkinIfNode(stack, node);
+                stack.Push(node);
+                continue;
+            }
+
+            if (stack.Count == 0)
+            {
+                _skinIfRows.Add(node);
+                continue;
+            }
+
+            stack.Peek().Children.Add(node);
+            if (line.Command.Equals("#ENDIF", StringComparison.OrdinalIgnoreCase))
+            {
+                stack.Pop();
+            }
+        }
+
+        while (stack.Count > 0)
+        {
+            var unclosed = stack.Pop();
+            unclosed.Children.Add(new SkinIfBlockView
+            {
+                Header = "missing #ENDIF",
+                Summary = "block is not closed",
+                Detail = $"{unclosed.Header} has no matching #ENDIF.",
+                SourcePath = unclosed.SourcePath,
+                SourceLineNumber = unclosed.SourceLineNumber
+            });
+        }
+
+        SkinIfTree.ItemsSource = _skinIfRows;
+        SkinIfSummaryText.Text = commandCount == 0
+            ? "No IF/ELSEIF/ELSE/ENDIF rows in the current skin."
+            : $"{_skinIfRows.Count:N0} root block(s), {commandCount:N0} IF-family row(s).";
+        SkinIfExpander.IsEnabled = commandCount > 0;
+    }
+
+    private void AddSkinIfNode(Stack<SkinIfBlockView> stack, SkinIfBlockView node)
+    {
+        if (stack.Count > 0)
+        {
+            stack.Peek().Children.Add(node);
+        }
+        else
+        {
+            // Root nodes stay as TreeView top-level items; nested IFs remain collapsible inside their parent block.
+            _skinIfRows.Add(node);
+        }
+    }
+
+    private SkinIfBlockView CreateSkinIfNode(SkinCommandLine line)
+    {
+        var arguments = FormatSkinHelpArguments(line.Fields);
+        var source = IOPath.GetFileName(line.SourcePath);
+        if (!line.IsMainFile)
+        {
+            source += " (include)";
+        }
+
+        return new SkinIfBlockView
+        {
+            Header = $"{source}:{line.SourceLine} {line.Command}",
+            Summary = arguments,
+            Detail = FormatSkinIfDetail(line, arguments),
+            SourcePath = line.SourcePath,
+            SourceLineNumber = line.SourceLine
+        };
+    }
+
+    private string FormatSkinIfDetail(SkinCommandLine line, string arguments)
+    {
+        _skinHelpTemplatesByCommand.TryGetValue(line.Command, out var template);
+        return FormatSkinHelpDetail(line, template, arguments, string.Empty);
+    }
+
+    private static bool IsSkinIfCommand(string command)
+    {
+        return command.Equals("#IF", StringComparison.OrdinalIgnoreCase) ||
+               command.Equals("#ELSEIF", StringComparison.OrdinalIgnoreCase) ||
+               command.Equals("#ELSE", StringComparison.OrdinalIgnoreCase) ||
+               command.Equals("#ENDIF", StringComparison.OrdinalIgnoreCase);
+    }
+
     private string ReadSkinHelpGroup(string command)
     {
         return _skinHelpGroupByCommand.TryGetValue(command, out var group) ? group : string.Empty;
@@ -2835,6 +3371,7 @@ public partial class MainWindow : Window
             }
         }
     }
+
     private string ReadSkinHelpMode()
     {
         return SkinHelpModeBox is not null && SkinHelpModeBox.SelectedItem is ComboBoxItem item && item.Tag is string tag
@@ -2871,18 +3408,32 @@ public partial class MainWindow : Window
     {
         return index >= 0 && index < fields.Count ? fields[index].Trim() : string.Empty;
     }
-    private static string FormatSkinHelpArguments(SkinCommandLine line, SkinHelpEntry? template)
-    {
-        if (line.Fields.Count <= 1) return string.Empty;
 
-        IReadOnlyList<string> templateFields = template is null ? Array.Empty<string>() : CsvUtil.Split(template.RawLine);
-        var parts = new List<string>();
-        for (var i = 1; i < line.Fields.Count; i++)
+    private static string FormatSkinHelpArguments(IReadOnlyList<string> fields)
+    {
+        if (fields.Count <= 1) return string.Empty;
+        return CsvUtil.Join(fields.Skip(1).Select(field => field.Trim()).ToList());
+    }
+
+    private static string FormatSkinHelpTemplateDetail(string path, int lineNumber, IReadOnlyList<string> fields, string rawLine)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"{path}:{lineNumber}");
+        builder.AppendLine(rawLine);
+        builder.AppendLine();
+
+        if (fields.Count <= 1)
         {
-            parts.Add($"{i}:{ReadSkinHelpFieldName(templateFields, i)}={line.Fields[i].Trim()}");
+            builder.AppendLine("No arguments.");
+            return builder.ToString().TrimEnd();
         }
 
-        return string.Join(", ", parts);
+        for (var i = 1; i < fields.Count; i++)
+        {
+            builder.AppendLine($"{i}: {ReadSkinHelpFieldName(fields, i)}");
+        }
+
+        return builder.ToString().TrimEnd();
     }
 
     private static string FormatSkinHelpDetail(SkinCommandLine line, SkinHelpEntry? template, string arguments, string position)
@@ -2970,6 +3521,8 @@ public partial class MainWindow : Window
         UpdateAssetPreview();
         _skinHelpRows.Clear();
         ApplySkinHelpFilter();
+        LoadSkinHelpEasyEditor(null);
+        RefreshSkinIfRows();
         ResolutionWidthBox.Text = "640";
         ResolutionHeightBox.Text = "480";
         PreviewCanvas.Width = 640;

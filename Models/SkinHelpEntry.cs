@@ -3,6 +3,8 @@ namespace SkinEditorNext.Models;
 public sealed class SkinHelpEntry
 {
     public SkinHelpEntry(
+        string sourcePath,
+        int sourceLineNumber,
         string source,
         string line,
         string group,
@@ -13,6 +15,8 @@ public sealed class SkinHelpEntry
         bool isTemplate,
         string detail)
     {
+        SourcePath = sourcePath;
+        SourceLineNumber = sourceLineNumber;
         Source = source;
         Line = line;
         Group = group;
@@ -24,21 +28,27 @@ public sealed class SkinHelpEntry
         Detail = detail;
     }
 
-    public string Source { get; }
+    public string SourcePath { get; }
 
-    public string Line { get; }
+    public int SourceLineNumber { get; }
 
-    public string Group { get; }
+    public string Source { get; set; }
 
-    public string Command { get; }
+    public string Line { get; set; }
 
-    public string Position { get; }
+    public string Group { get; set; }
 
-    public string Arguments { get; }
+    public string Command { get; set; }
 
-    public string RawLine { get; }
+    public string Position { get; set; }
+
+    public string Arguments { get; set; }
+
+    public string RawLine { get; set; }
 
     public bool IsTemplate { get; }
 
-    public string Detail { get; }
+    public string Detail { get; set; }
+
+    public bool CanEdit => !string.IsNullOrWhiteSpace(SourcePath) && SourceLineNumber > 0;
 }

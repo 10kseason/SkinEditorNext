@@ -425,9 +425,14 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="380"/>
+                            </Grid.ColumnDefinitions>
 
-                            <Border Grid.Row="0" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1" Padding="10,8">
+                            <Border Grid.Row="0" Grid.ColumnSpan="2" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1" Padding="10,8">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -464,27 +469,172 @@
 
                             <DataGrid x:Name="SkinHelpGrid"
                                       Grid.Row="1"
+                                      Grid.Column="0"
                                       AutoGenerateColumns="False"
-                                      IsReadOnly="True"
+                                      IsReadOnly="False"
                                       SelectionMode="Single"
                                       HeadersVisibility="Column"
                                       GridLinesVisibility="Horizontal"
                                       CanUserAddRows="False"
+                                      CanUserDeleteRows="False"
+                                      BeginningEdit="SkinHelpGrid_BeginningEdit"
+                                      CellEditEnding="SkinHelpGrid_CellEditEnding"
                                       SelectionChanged="SkinHelpGrid_SelectionChanged"
                                       MouseDoubleClick="SkinHelpGrid_MouseDoubleClick">
+                                <DataGrid.CellStyle>
+                                    <Style TargetType="{x:Type DataGridCell}">
+                                        <Setter Property="ToolTip" Value="{Binding Detail}"/>
+                                    </Style>
+                                </DataGrid.CellStyle>
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="130"/>
-                                    <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="62"/>
-                                    <DataGridTextColumn Header="Group" Binding="{Binding Group}" Width="120"/>
-                                    <DataGridTextColumn Header="Command" Binding="{Binding Command}" Width="150"/>
-                                    <DataGridTextColumn Header="Position" Binding="{Binding Position}" Width="150"/>
-                                    <DataGridTextColumn Header="Fields" Binding="{Binding Arguments}" Width="2*"/>
-                                    <DataGridTextColumn Header="CSV" Binding="{Binding RawLine}" Width="2*"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="120" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="58" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Group" Binding="{Binding Group}" Width="110" IsReadOnly="True"/>
+                                    <DataGridTemplateColumn Header="Command" Width="160">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Command}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Detail}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                        <DataGridTemplateColumn.CellEditingTemplate>
+                                            <DataTemplate>
+                                                <ComboBox IsEditable="True"
+                                                          IsTextSearchEnabled="True"
+                                                          ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=SkinHelpCommandChoices}"
+                                                          Text="{Binding Command, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellEditingTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Position" Binding="{Binding Position}" Width="130" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Fields" Binding="{Binding Arguments, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                    <DataGridTextColumn Header="CSV" Binding="{Binding RawLine, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="140"/>
                                 </DataGrid.Columns>
                             </DataGrid>
 
+                            <Border Grid.Row="1"
+                                    Grid.RowSpan="3"
+                                    Grid.Column="1"
+                                    BorderBrush="#E5E7EB"
+                                    BorderThickness="1,0,0,0"
+                                    Padding="12">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0"
+                                               Text="쉬운 헬퍼"
+                                               FontSize="16"
+                                               FontWeight="SemiBold"
+                                               Foreground="#111827"/>
+                                    <TextBlock x:Name="SkinHelpEasySummaryText"
+                                               Grid.Row="1"
+                                               Margin="0,4,0,10"
+                                               TextWrapping="Wrap"
+                                               Foreground="#4B5563"/>
+
+                                    <StackPanel Grid.Row="2" Margin="0,0,0,10">
+                                        <TextBlock Text="명령" FontWeight="SemiBold" Foreground="#111827"/>
+                                        <ComboBox x:Name="SkinHelpEasyCommandBox"
+                                                  Margin="0,4,0,0"
+                                                  MinHeight="30"
+                                                  IsEditable="True"
+                                                  IsTextSearchEnabled="True"
+                                                  ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=SkinHelpCommandChoices}"
+                                                  SelectionChanged="SkinHelpEasyCommandBox_SelectionChanged"
+                                                  LostKeyboardFocus="SkinHelpEasyCommandBox_LostKeyboardFocus"/>
+                                    </StackPanel>
+
+                                    <DataGrid x:Name="SkinHelpEasyFieldsGrid"
+                                              Grid.Row="3"
+                                              AutoGenerateColumns="False"
+                                              IsReadOnly="False"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              HeadersVisibility="Column"
+                                              GridLinesVisibility="Horizontal">
+                                        <DataGrid.CellStyle>
+                                            <Style TargetType="{x:Type DataGridCell}">
+                                                <Setter Property="ToolTip" Value="{Binding Hint}"/>
+                                            </Style>
+                                        </DataGrid.CellStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="42" IsReadOnly="True"/>
+                                            <DataGridTextColumn Header="칸" Binding="{Binding Name}" Width="150" IsReadOnly="True"/>
+                                            <DataGridTextColumn Header="값" Binding="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+
+                                    <UniformGrid Grid.Row="4" Columns="3" Margin="0,10,0,8">
+                                        <Button x:Name="SkinHelpEasyApplyButton"
+                                                Content="적용"
+                                                MinHeight="30"
+                                                Margin="0,0,6,0"
+                                                Click="SkinHelpEasyApply_Click"/>
+                                        <Button x:Name="SkinHelpEasyInsertButton"
+                                                Content="코드에 넣기"
+                                                MinHeight="30"
+                                                Margin="0,0,6,0"
+                                                Click="SkinHelpEasyInsert_Click"/>
+                                        <Button x:Name="SkinHelpEasyResetButton"
+                                                Content="되돌리기"
+                                                MinHeight="30"
+                                                Click="SkinHelpEasyReset_Click"/>
+                                    </UniformGrid>
+
+                                    <Expander Grid.Row="5" Header="고급 CSV" IsExpanded="False">
+                                        <TextBox x:Name="SkinHelpEasyCsvBox"
+                                                 IsReadOnly="True"
+                                                 Margin="0,6,0,0"
+                                                 MinHeight="54"
+                                                 TextWrapping="Wrap"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
+                                                 FontSize="12"/>
+                                    </Expander>
+                                </Grid>
+                            </Border>
+
+                            <Expander x:Name="SkinIfExpander"
+                                      Grid.Row="2"
+                                      Grid.Column="0"
+                                      Header="IF blocks"
+                                      IsExpanded="False"
+                                      BorderBrush="#E5E7EB"
+                                      BorderThickness="0,1,0,0"
+                                      Padding="10,6">
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock x:Name="SkinIfSummaryText"
+                                               DockPanel.Dock="Top"
+                                               Margin="0,0,0,6"
+                                               Foreground="#4B5563"/>
+                                    <TreeView x:Name="SkinIfTree"
+                                              MaxHeight="190"
+                                              SelectedItemChanged="SkinIfTree_SelectedItemChanged">
+                                        <TreeView.ItemTemplate>
+                                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                                <StackPanel Orientation="Horizontal" ToolTip="{Binding Detail}">
+                                                    <TextBlock Text="{Binding Header}"
+                                                               FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"/>
+                                                    <TextBlock Text="{Binding Summary}"
+                                                               Margin="8,0,0,0"
+                                                               Foreground="#6B7280"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </StackPanel>
+                                            </HierarchicalDataTemplate>
+                                        </TreeView.ItemTemplate>
+                                    </TreeView>
+                                </DockPanel>
+                            </Expander>
+
                             <TextBox x:Name="SkinHelpDetailBox"
-                                     Grid.Row="2"
+                                     Grid.Row="3"
+                                     Grid.Column="0"
                                      IsReadOnly="True"
                                      AcceptsReturn="True"
                                      VerticalScrollBarVisibility="Auto"
