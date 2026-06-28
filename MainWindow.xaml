@@ -386,9 +386,16 @@
                                   IsReadOnly="True"
                                   SelectionMode="Single"
                                   SelectionChanged="ObjectsGrid_SelectionChanged"
+                                  PreviewMouseRightButtonDown="DataGrid_PreviewMouseRightButtonDown"
                                   HeadersVisibility="Column"
                                   GridLinesVisibility="Horizontal"
                                   CanUserAddRows="False">
+                            <DataGrid.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="New Object" Click="CreateObjectFromContext_Click"/>
+                                    <MenuItem Header="Delete Selected Object" Click="DeleteSelectedObject_Click"/>
+                                </ContextMenu>
+                            </DataGrid.ContextMenu>
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="#" Binding="{Binding Id}" Width="42"/>
                                 <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="105"/>
@@ -417,7 +424,9 @@
                                  HorizontalScrollBarVisibility="Auto"
                                  FontFamily="Consolas, Yu Gothic UI, Meiryo, MS Gothic"
                                  FontSize="13"
-                                 TextChanged="CodeEditor_TextChanged"/>
+                                 TextChanged="CodeEditor_TextChanged"
+                                 PreviewKeyDown="PreviewCodeEditor_PreviewKeyDown"
+                                 LostKeyboardFocus="PreviewCodeEditor_LostKeyboardFocus"/>
                     </TabItem>
                     <TabItem Header="Help">
                         <Grid Background="#FFFFFF">
@@ -480,7 +489,13 @@
                                       BeginningEdit="SkinHelpGrid_BeginningEdit"
                                       CellEditEnding="SkinHelpGrid_CellEditEnding"
                                       SelectionChanged="SkinHelpGrid_SelectionChanged"
-                                      MouseDoubleClick="SkinHelpGrid_MouseDoubleClick">
+                                      PreviewMouseRightButtonDown="DataGrid_PreviewMouseRightButtonDown">
+                                <DataGrid.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="New Object" Click="CreateObjectFromHelpContext_Click"/>
+                                        <MenuItem Header="Delete Helper Object" Click="DeleteObjectFromHelpContext_Click"/>
+                                    </ContextMenu>
+                                </DataGrid.ContextMenu>
                                 <DataGrid.CellStyle>
                                     <Style TargetType="{x:Type DataGridCell}">
                                         <Setter Property="ToolTip" Value="{Binding Detail}"/>
@@ -772,7 +787,15 @@
                                                     MouseLeftButtonDown="PreviewCanvas_MouseLeftButtonDown"
                                                     MouseMove="PreviewCanvas_MouseMove"
                                                     MouseLeftButtonUp="PreviewCanvas_MouseLeftButtonUp"
-                                                    KeyDown="PreviewCanvas_KeyDown"/>
+                                                    MouseRightButtonDown="PreviewCanvas_MouseRightButtonDown"
+                                                    KeyDown="PreviewCanvas_KeyDown">
+                                                <Canvas.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="New Object Here" Click="CreateObjectAtPreviewContext_Click"/>
+                                                        <MenuItem Header="Delete Selected Object" Click="DeleteSelectedObject_Click"/>
+                                                    </ContextMenu>
+                                                </Canvas.ContextMenu>
+                                            </Canvas>
                                         </Grid>
                                     </ScrollViewer>
                                     <TextBlock x:Name="PreviewOverlay"

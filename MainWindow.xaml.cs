@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -26,6 +27,7 @@ public partial class MainWindow : Window
     private readonly List<SkinHelpEntry> _skinHelpTemplates = new();
     private readonly Dictionary<string, SkinHelpEntry> _skinHelpTemplatesByCommand = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _skinHelpGroupByCommand = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _skinHelpSortOrderByCommand = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SkinHelpEntry> _skinHelpRows = new();
     private readonly List<string> _skinHelpCommandChoices = new();
     private readonly List<SkinHelpFieldEdit> _skinHelpEasyFields = new();
@@ -34,6 +36,13 @@ public partial class MainWindow : Window
     private readonly List<Lr2PreviewItem> _previewItems = new();
     private readonly List<PreviewCodeDocument> _previewCodeDocuments = new();
     private readonly DispatcherTimer _previewCodeRefreshTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private Popup? _previewCodeCompletionPopup;
+    private ListBox? _previewCodeCompletionList;
+    private TextBox? _previewCodeCompletionEditor;
+    private int _previewCodeCompletionStart;
+    private int _previewCodeCompletionLength;
+    private bool _applyingPreviewCodeCompletion;
+    private Point? _previewContextPoint;
     private Lr2SkinDocument? _document;
     private bool _loadingEditor;
     private bool _loadingPreviewCodeEditors;
@@ -59,6 +68,7 @@ public partial class MainWindow : Window
     private double _previewPanStartHorizontalOffset;
     private double _previewPanStartVerticalOffset;
     private bool _applyingSkinHelpEdit;
+    private SkinHelpEditSnapshot? _skinHelpEditSnapshot;
     private bool _loadingSkinHelpEasyEditor;
 
     public IReadOnlyList<string> SkinHelpCommandChoices => _skinHelpCommandChoices;
@@ -600,6 +610,131 @@ public partial class MainWindow : Window
         SetStatus($"Added {kind} object.");
     }
 
+
+    private void CreateObjectFromContext_Click(object sender, RoutedEventArgs e)
+    {
+        AddObject_Click(sender, e);
+    }
+
+    private void CreateObjectFromHelpContext_Click(object sender, RoutedEventArgs e)
+    {
+        if (SkinHelpGrid.SelectedItem is SkinHelpEntry entry)
+        {
+            SelectCreateKindFromCommand(entry.Command);
+        }
+
+        AddObject_Click(sender, e);
+    }
+
+    private void CreateObjectAtPreviewContext_Click(object sender, RoutedEventArgs e)
+    {
+        if (_previewContextPoint is Point point)
+        {
+            SetCreatePosition(point);
+        }
+
+        AddObject_Click(sender, e);
+    }
+
+    private void DeleteSelectedObject_Click(object sender, RoutedEventArgs e)
+    {
+        var item = ReadSelectedSkinObject();
+        if (item is null)
+        {
+            SetStatus("Select an object first.");
+            return;
+        }
+
+        DeletePreviewObject(item);
+    }
+
+    private void DeleteObjectFromHelpContext_Click(object sender, RoutedEventArgs e)
+    {
+        if (SkinHelpGrid.SelectedItem is not SkinHelpEntry entry)
+        {
+            SetStatus("Right-click a helper object row first.");
+            return;
+        }
+
+        var item = FindObjectForSkinHelpEntry(entry);
+        if (item is null)
+        {
+            SetStatus("This helper row is not a preview object row.");
+            return;
+        }
+
+        DeletePreviewObject(item);
+    }
+
+    private void SelectCreateKindFromCommand(string command)
+    {
+        var tag = command.Contains("TEXT", StringComparison.OrdinalIgnoreCase)
+            ? "text"
+            : command.Contains("NUMBER", StringComparison.OrdinalIgnoreCase)
+                ? "number"
+                : command.Contains("IMAGE", StringComparison.OrdinalIgnoreCase)
+                    ? "image"
+                    : null;
+        if (tag is null || CreateKindBox is null)
+        {
+            return;
+        }
+
+        foreach (ComboBoxItem item in CreateKindBox.Items)
+        {
+            if (item.Tag is string itemTag && itemTag.Equals(tag, StringComparison.OrdinalIgnoreCase))
+            {
+                CreateKindBox.SelectedItem = item;
+                return;
+            }
+        }
+    }
+
+    private void SetCreatePosition(Point point)
+    {
+        CreateXBox.Text = Math.Max(0, (int)Math.Round(point.X)).ToString(CultureInfo.InvariantCulture);
+        CreateYBox.Text = Math.Max(0, (int)Math.Round(point.Y)).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private SkinObjectView? ReadSelectedSkinObject()
+    {
+        if (_document is null)
+        {
+            return null;
+        }
+
+        if (ObjectsGrid.SelectedItem is SkinObjectView selectedGridItem)
+        {
+            return selectedGridItem;
+        }
+
+        return _selectedPreviewObjectId is int selectedId
+            ? _document.Objects.FirstOrDefault(item => item.Id == selectedId)
+            : null;
+    }
+
+    private SkinObjectView? FindObjectForSkinHelpEntry(SkinHelpEntry entry)
+    {
+        if (_document is null || entry.IsTemplate)
+        {
+            return null;
+        }
+
+        if (entry.Command.StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase))
+        {
+            return _document.Objects.FirstOrDefault(item =>
+                item.SrcLine == entry.SourceLineNumber && IsSamePath(item.SourceFile, entry.SourcePath));
+        }
+
+        if (entry.Command.StartsWith("#DST_", StringComparison.OrdinalIgnoreCase))
+        {
+            return _document.Objects.FirstOrDefault(item =>
+                IsSamePath(ReadObjectDstFile(item), entry.SourcePath) &&
+                item.Frames.Any(frame => frame.Line == entry.SourceLineNumber));
+        }
+
+        return null;
+    }
     private void ObjectsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ObjectsGrid.SelectedItem is not SkinObjectView item)
@@ -608,6 +743,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _selectedPreviewObjectId = item.Id;
         SelectedObjectText.Text = $"{item.Kind} at {item.Location}" + (item.IsEditableInMain ? string.Empty : " (include)");
         SelectImageAssetForObject(item);
         SourceXBox.Text = item.SourceX.ToString(CultureInfo.InvariantCulture);
@@ -618,6 +754,23 @@ public partial class MainWindow : Window
         DestYBox.Text = item.DestY.ToString(CultureInfo.InvariantCulture);
         DestWidthBox.Text = item.DestWidth.ToString(CultureInfo.InvariantCulture);
         DestHeightBox.Text = item.DestHeight.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private void DataGrid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGrid grid || e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        var row = FindVisualAncestor<DataGridRow>(source);
+        if (row?.Item is null)
+        {
+            return;
+        }
+
+        grid.SelectedItem = row.Item;
+        row.Focus();
     }
 
     private void PreviewTimeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -657,16 +810,20 @@ public partial class MainWindow : Window
         SyncPreviewMainDocumentFromCodeEditor();
         SchedulePreviewCodeRefresh();
         UpdateTitle();
+        if (!_applyingPreviewCodeCompletion)
+        {
+            UpdatePreviewCodeCompletion(CodeEditor);
+        }
     }
 
     private void SkinHelpSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        ApplySkinHelpFilter();
+        ApplySkinHelpFilter(preservePosition: false);
     }
 
     private void SkinHelpModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        ApplySkinHelpFilter();
+        ApplySkinHelpFilter(preservePosition: false);
     }
 
     private void SkinHelpGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -678,21 +835,29 @@ public partial class MainWindow : Window
 
     private void SkinHelpGrid_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
     {
-        if (e.Row.Item is not SkinHelpEntry entry || !entry.CanEdit || !IsEditableSkinHelpColumn(e.Column.Header?.ToString()))
+        var editedColumn = e.Column.Header?.ToString() ?? string.Empty;
+        if (e.Row.Item is not SkinHelpEntry entry || !entry.CanEdit || !IsEditableSkinHelpColumn(editedColumn))
         {
+            _skinHelpEditSnapshot = null;
             e.Cancel = true;
+            return;
         }
+
+        _skinHelpEditSnapshot = SkinHelpEditSnapshot.Capture(entry, editedColumn);
     }
 
     private void SkinHelpGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction != DataGridEditAction.Commit || e.Row.Item is not SkinHelpEntry entry)
         {
+            _skinHelpEditSnapshot = null;
             return;
         }
 
         var editedColumn = e.Column.Header?.ToString() ?? string.Empty;
-        Dispatcher.BeginInvoke(new Action(() => ApplySkinHelpEntryEdit(entry, editedColumn)), DispatcherPriority.Background);
+        var editSnapshot = _skinHelpEditSnapshot;
+        _skinHelpEditSnapshot = null;
+        Dispatcher.BeginInvoke(new Action(() => ApplySkinHelpEntryEditIfChanged(entry, editedColumn, editSnapshot)), DispatcherPriority.Background);
     }
 
     private static bool IsEditableSkinHelpColumn(string? header)
@@ -761,10 +926,6 @@ public partial class MainWindow : Window
     private void SkinHelpEasyReset_Click(object sender, RoutedEventArgs e)
     {
         LoadSkinHelpEasyEditor(SkinHelpGrid.SelectedItem as SkinHelpEntry);
-    }
-    private void SkinHelpGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        InsertSelectedSkinHelpLine();
     }
 
     private void InsertSkinHelp_Click(object sender, RoutedEventArgs e)
@@ -947,8 +1108,261 @@ public partial class MainWindow : Window
         UpdatePreviewCodeStatus(document);
         SchedulePreviewCodeRefresh();
         UpdateTitle();
+        if (!_applyingPreviewCodeCompletion)
+        {
+            UpdatePreviewCodeCompletion(editor);
+        }
     }
 
+
+    private void PreviewCodeEditor_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox editor)
+        {
+            return;
+        }
+
+        if (IsPreviewCodeCompletionOpenFor(editor))
+        {
+            if (e.Key == Key.Down)
+            {
+                MovePreviewCodeCompletionSelection(1);
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Up)
+            {
+                MovePreviewCodeCompletionSelection(-1);
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key is Key.Enter or Key.Tab)
+            {
+                CommitPreviewCodeCompletion();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape)
+            {
+                ClosePreviewCodeCompletion();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (e.Key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+        {
+            UpdatePreviewCodeCompletion(editor, force: true);
+            e.Handled = true;
+        }
+    }
+
+    private void PreviewCodeEditor_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        ClosePreviewCodeCompletion();
+    }
+
+    private void UpdatePreviewCodeCompletion(TextBox editor, bool force = false)
+    {
+        if (!TryReadPreviewCodeCompletionContext(editor, force, out var context))
+        {
+            ClosePreviewCodeCompletion();
+            return;
+        }
+
+        var completions = ReadPreviewCodeCommandCompletions(context.Prefix).ToList();
+        if (completions.Count == 0 || completions.Any(completion => completion.Command.Equals(context.Prefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            ClosePreviewCodeCompletion();
+            return;
+        }
+
+        EnsurePreviewCodeCompletionPopup();
+        if (_previewCodeCompletionPopup is null || _previewCodeCompletionList is null)
+        {
+            return;
+        }
+
+        _previewCodeCompletionEditor = editor;
+        _previewCodeCompletionStart = context.Start;
+        _previewCodeCompletionLength = context.Length;
+        _previewCodeCompletionList.ItemsSource = completions;
+        _previewCodeCompletionList.SelectedIndex = 0;
+
+        var rect = ReadCaretRect(editor);
+        _previewCodeCompletionPopup.PlacementTarget = editor;
+        _previewCodeCompletionPopup.Placement = PlacementMode.Relative;
+        _previewCodeCompletionPopup.HorizontalOffset = Math.Max(0, rect.Left);
+        _previewCodeCompletionPopup.VerticalOffset = Math.Max(0, rect.Bottom + 2);
+        _previewCodeCompletionPopup.IsOpen = true;
+    }
+
+    private IEnumerable<PreviewCommandCompletion> ReadPreviewCodeCommandCompletions(string prefix)
+    {
+        var commands = _skinHelpCommandChoices.Count > 0
+            ? _skinHelpCommandChoices
+            : new List<string> { "#SRC_IMAGE", "#DST_IMAGE", "#SRC_TEXT", "#DST_TEXT" };
+        return commands
+            .Where(command => command.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(command => command, StringComparer.OrdinalIgnoreCase)
+            .Take(4)
+            .Select(command => new PreviewCommandCompletion(command, ReadSkinHelpGroup(command)));
+    }
+
+    private static bool TryReadPreviewCodeCompletionContext(TextBox editor, bool force, out PreviewCodeCompletionContext context)
+    {
+        context = default;
+        var caret = editor.CaretIndex;
+        var text = editor.Text;
+        if (caret < 0 || caret > text.Length)
+        {
+            return false;
+        }
+
+        var lineStart = text.LastIndexOf('\n', Math.Max(0, caret - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        var beforeCaret = text.Substring(lineStart, caret - lineStart);
+        var commandStartInLine = beforeCaret.Length - beforeCaret.TrimStart().Length;
+        if (commandStartInLine >= beforeCaret.Length || beforeCaret[commandStartInLine] != '#')
+        {
+            return false;
+        }
+
+        var prefix = beforeCaret[commandStartInLine..];
+        if (prefix.Length < 2 && !force)
+        {
+            return false;
+        }
+
+        if (prefix.Any(character => char.IsWhiteSpace(character) || character == ','))
+        {
+            return false;
+        }
+
+        var start = lineStart + commandStartInLine;
+        context = new PreviewCodeCompletionContext(start, caret - start, prefix);
+        return true;
+    }
+
+    private static Rect ReadCaretRect(TextBox editor)
+    {
+        try
+        {
+            var rect = editor.GetRectFromCharacterIndex(editor.CaretIndex, trailingEdge: true);
+            if (!rect.IsEmpty)
+            {
+                return rect;
+            }
+        }
+        catch
+        {
+        }
+
+        return new Rect(8, 20, 0, 16);
+    }
+
+    private void EnsurePreviewCodeCompletionPopup()
+    {
+        if (_previewCodeCompletionPopup is not null)
+        {
+            return;
+        }
+
+        _previewCodeCompletionList = new ListBox
+        {
+            DisplayMemberPath = nameof(PreviewCommandCompletion.Label),
+            MinWidth = 260,
+            MaxHeight = 128,
+            FontFamily = new FontFamily("Consolas, Yu Gothic UI, Meiryo, MS Gothic"),
+            FontSize = 12,
+            Background = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
+            Foreground = new SolidColorBrush(Color.FromRgb(243, 244, 246)),
+            BorderThickness = new Thickness(0),
+            Focusable = false
+        };
+        _previewCodeCompletionList.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (e.OriginalSource is DependencyObject source && FindVisualAncestor<ListBoxItem>(source) is { DataContext: PreviewCommandCompletion completion })
+            {
+                _previewCodeCompletionList.SelectedItem = completion;
+                CommitPreviewCodeCompletion();
+                e.Handled = true;
+            }
+        };
+
+        var border = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(34, 211, 238)),
+            BorderThickness = new Thickness(1),
+            Child = _previewCodeCompletionList
+        };
+
+        _previewCodeCompletionPopup = new Popup
+        {
+            AllowsTransparency = true,
+            StaysOpen = false,
+            Child = border
+        };
+    }
+
+    private bool IsPreviewCodeCompletionOpenFor(TextBox editor)
+    {
+        return _previewCodeCompletionPopup?.IsOpen == true && ReferenceEquals(_previewCodeCompletionEditor, editor);
+    }
+
+    private void MovePreviewCodeCompletionSelection(int delta)
+    {
+        if (_previewCodeCompletionList is null || _previewCodeCompletionList.Items.Count == 0)
+        {
+            return;
+        }
+
+        var next = Math.Clamp(_previewCodeCompletionList.SelectedIndex + delta, 0, _previewCodeCompletionList.Items.Count - 1);
+        _previewCodeCompletionList.SelectedIndex = next;
+        _previewCodeCompletionList.ScrollIntoView(_previewCodeCompletionList.SelectedItem);
+    }
+
+    private void CommitPreviewCodeCompletion()
+    {
+        if (_previewCodeCompletionEditor is null || _previewCodeCompletionList?.SelectedItem is not PreviewCommandCompletion completion)
+        {
+            ClosePreviewCodeCompletion();
+            return;
+        }
+
+        var editor = _previewCodeCompletionEditor;
+        var text = editor.Text;
+        if (_previewCodeCompletionStart < 0 || _previewCodeCompletionStart + _previewCodeCompletionLength > text.Length)
+        {
+            ClosePreviewCodeCompletion();
+            return;
+        }
+
+        _applyingPreviewCodeCompletion = true;
+        editor.Text = text.Remove(_previewCodeCompletionStart, _previewCodeCompletionLength)
+            .Insert(_previewCodeCompletionStart, completion.Command);
+        editor.CaretIndex = _previewCodeCompletionStart + completion.Command.Length;
+        _applyingPreviewCodeCompletion = false;
+        ClosePreviewCodeCompletion();
+        editor.Focus();
+    }
+
+    private void ClosePreviewCodeCompletion()
+    {
+        if (_previewCodeCompletionPopup is not null)
+        {
+            _previewCodeCompletionPopup.IsOpen = false;
+        }
+
+        _previewCodeCompletionEditor = null;
+        _previewCodeCompletionStart = 0;
+        _previewCodeCompletionLength = 0;
+    }
     private void PreviewCodeRefreshTimer_Tick(object? sender, EventArgs e)
     {
         _previewCodeRefreshTimer.Stop();
@@ -1128,6 +1542,8 @@ public partial class MainWindow : Window
             Tag = document
         };
         editor.TextChanged += PreviewCodeEditor_TextChanged;
+        editor.PreviewKeyDown += PreviewCodeEditor_PreviewKeyDown;
+        editor.LostKeyboardFocus += PreviewCodeEditor_LostKeyboardFocus;
         document.Editor = editor;
 
         return new TabItem
@@ -1794,6 +2210,8 @@ public partial class MainWindow : Window
             ClearPreviewDrag();
             _selectedPreviewObjectId = null;
             _selectedPreviewItem = null;
+            ObjectsGrid.SelectedItem = null;
+            UpdatePreviewSelectionPanel();
             RenderPreview();
             SetStatus($"No preview object at {FormatDouble(point.X)},{FormatDouble(point.Y)}.");
             return false;
@@ -1828,6 +2246,18 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+
+    private void PreviewCanvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_document is null)
+        {
+            return;
+        }
+
+        _previewContextPoint = e.GetPosition(PreviewCanvas);
+        PreviewCanvas.Focus();
+        SelectPreviewItemAt(_previewContextPoint.Value, beginObjectDrag: false);
+    }
     private void PreviewCanvas_MouseMove(object sender, MouseEventArgs e)
     {
         if (_panningPreview)
@@ -2246,6 +2676,140 @@ public partial class MainWindow : Window
         }
     }
 
+
+    private bool DeletePreviewObject(SkinObjectView item)
+    {
+        if (_document is null)
+        {
+            SetStatus("Create or open a .lr2skin file first.");
+            return false;
+        }
+
+        var lineGroups = BuildPreviewObjectDeletionLineGroups(item);
+        var deleteLineCount = lineGroups.Values.Sum(lines => lines.Distinct().Count());
+        if (deleteLineCount == 0)
+        {
+            SetStatus("No editable lines found for the selected object.");
+            return false;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            $"Delete object #{item.Id} {item.Kind} and {deleteLineCount:N0} code line(s)?",
+            "Delete object",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return false;
+        }
+
+        foreach (var group in lineGroups)
+        {
+            if (!RemovePreviewCodeDocumentLines(group.Key, group.Value))
+            {
+                return false;
+            }
+        }
+
+        ClearPreviewDrag();
+        _selectedPreviewObjectId = null;
+        _selectedPreviewItem = null;
+        ObjectsGrid.SelectedItem = null;
+        _dirty = true;
+        UpdateTitle();
+        RefreshDocumentFromEditor();
+        RenderPreview();
+        SetStatus($"Deleted object #{item.Id}.");
+        return true;
+    }
+
+    private Dictionary<string, List<int>> BuildPreviewObjectDeletionLineGroups(SkinObjectView item)
+    {
+        var groups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+        AddDeletionLine(groups, item.SourceFile, item.SrcLine);
+
+        var dstFile = ReadObjectDstFile(item);
+        foreach (var frame in item.Frames)
+        {
+            AddDeletionLine(groups, dstFile, frame.Line);
+        }
+
+        if (item.Frames.Count == 0 && item.DstLine > 0)
+        {
+            AddDeletionLine(groups, dstFile, item.DstLine);
+        }
+
+        return groups;
+    }
+
+    private static void AddDeletionLine(Dictionary<string, List<int>> groups, string path, int lineNumber)
+    {
+        if (string.IsNullOrWhiteSpace(path) || lineNumber <= 0)
+        {
+            return;
+        }
+
+        if (!groups.TryGetValue(path, out var lines))
+        {
+            lines = new List<int>();
+            groups[path] = lines;
+        }
+
+        lines.Add(lineNumber);
+    }
+
+    private bool RemovePreviewCodeDocumentLines(string path, IEnumerable<int> lineNumbers)
+    {
+        var document = FindPreviewCodeDocument(path);
+        if (document is null)
+        {
+            SetStatus($"Preview code tab not found: {path}");
+            return false;
+        }
+
+        var lines = SplitEditorLines(ReadPreviewCodeDocumentText(document));
+        foreach (var lineNumber in lineNumbers.Distinct().OrderByDescending(line => line))
+        {
+            if (lineNumber <= 0 || lineNumber > lines.Count)
+            {
+                SetStatus($"Line {lineNumber:N0} is outside {FormatPreviewCodePathLabel(path)}.");
+                return false;
+            }
+
+            lines.RemoveAt(lineNumber - 1);
+        }
+
+        WritePreviewCodeDocumentText(document, string.Join(Environment.NewLine, lines));
+        return true;
+    }
+
+    private static List<string> SplitEditorLines(string text)
+    {
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').ToList();
+    }
+
+    private void WritePreviewCodeDocumentText(PreviewCodeDocument document, string updatedText)
+    {
+        document.Text = updatedText;
+        document.IsDirty = true;
+        _dirty = true;
+
+        if (document.IsMain)
+        {
+            SetEditorText(updatedText, markDirty: true);
+        }
+
+        if (document.Editor is not null && document.Editor.Text != updatedText)
+        {
+            _loadingPreviewCodeEditors = true;
+            document.Editor.Text = updatedText;
+            _loadingPreviewCodeEditors = false;
+        }
+
+        UpdatePreviewCodeTabHeader(document);
+        UpdatePreviewCodeStatus(document);
+    }
     private bool TryReadPreviewCsvLine(TextBox box, string expectedPrefix, string label, out string csv)
     {
         csv = box.Text.Trim();
@@ -2764,6 +3328,7 @@ public partial class MainWindow : Window
         _skinHelpTemplates.Clear();
         _skinHelpTemplatesByCommand.Clear();
         _skinHelpGroupByCommand.Clear();
+        _skinHelpSortOrderByCommand.Clear();
         _skinHelpCommandChoices.Clear();
 
         var groupPath = FindSkinObjGroupPath();
@@ -2868,16 +3433,16 @@ public partial class MainWindow : Window
         ApplySkinHelpFilter();
     }
 
-    private void ApplySkinHelpFilter()
+    private void ApplySkinHelpFilter(bool preservePosition = true)
     {
         if (SkinHelpGrid is null || SkinHelpSearchBox is null || SkinHelpSummaryText is null) return;
 
-        var sourceRows = ReadSkinHelpMode() == "templates" || (_document is null && _skinHelpRows.Count == 0)
-            ? _skinHelpTemplates
-            : _skinHelpRows;
+        var position = preservePosition ? CaptureSkinHelpGridPosition() : null;
+        var showingTemplates = ReadSkinHelpMode() == "templates";
+        var sourceRows = showingTemplates ? _skinHelpTemplates : _skinHelpRows;
         var query = SkinHelpSearchBox.Text.Trim();
-        var filtered = string.IsNullOrWhiteSpace(query)
-            ? sourceRows
+        List<SkinHelpEntry> filtered = string.IsNullOrWhiteSpace(query)
+            ? sourceRows.ToList()
             : sourceRows
                 .Where(entry =>
                     entry.Source.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -2888,13 +3453,127 @@ public partial class MainWindow : Window
                     entry.Arguments.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                     entry.RawLine.Contains(query, StringComparison.OrdinalIgnoreCase))
                 .ToList();
+        filtered = SortSkinHelpRows(filtered);
 
         SkinHelpGrid.ItemsSource = null;
         SkinHelpGrid.ItemsSource = filtered;
-        var label = ReferenceEquals(sourceRows, _skinHelpTemplates) ? "template" : "skin row";
+        if (position is not null)
+        {
+            RestoreSkinHelpGridPosition(position, filtered);
+        }
+
+        var label = showingTemplates ? "template" : "skin row";
         SkinHelpSummaryText.Text = $"{filtered.Count:N0} / {sourceRows.Count:N0} {label}(s)";
     }
+    private List<SkinHelpEntry> SortSkinHelpRows(List<SkinHelpEntry> rows)
+    {
+        return rows
+            .Select((entry, index) => new { Entry = entry, Index = index })
+            .OrderBy(pair => ReadSkinHelpSortOrder(pair.Entry.Command))
+            .ThenBy(pair => pair.Index)
+            .Select(pair => pair.Entry)
+            .ToList();
+    }
 
+    private int ReadSkinHelpSortOrder(string command)
+    {
+        return _skinHelpSortOrderByCommand.TryGetValue(NormalizeSkinHelpCommand(command), out var order)
+            ? order
+            : int.MaxValue;
+    }
+
+    private SkinHelpGridPosition? CaptureSkinHelpGridPosition()
+    {
+        if (SkinHelpGrid is null)
+        {
+            return null;
+        }
+
+        var entry = SkinHelpGrid.SelectedItem as SkinHelpEntry;
+        var scrollViewer = FindVisualDescendant<ScrollViewer>(SkinHelpGrid);
+        return new SkinHelpGridPosition(
+            entry?.SourcePath,
+            entry?.SourceLineNumber ?? 0,
+            entry?.IsTemplate ?? false,
+            scrollViewer?.VerticalOffset ?? 0,
+            scrollViewer?.HorizontalOffset ?? 0);
+    }
+
+    private void RestoreSkinHelpGridPosition(SkinHelpGridPosition position, IReadOnlyList<SkinHelpEntry> rows)
+    {
+        if (SkinHelpGrid is null)
+        {
+            return;
+        }
+
+        var selectedEntry = rows.FirstOrDefault(entry => SkinHelpEntryMatchesPosition(entry, position));
+        if (selectedEntry is not null)
+        {
+            SkinHelpGrid.SelectedItem = selectedEntry;
+        }
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (selectedEntry is not null)
+            {
+                SkinHelpGrid.UpdateLayout();
+                SkinHelpGrid.ScrollIntoView(selectedEntry);
+            }
+
+            var scrollViewer = FindVisualDescendant<ScrollViewer>(SkinHelpGrid);
+            if (scrollViewer is null)
+            {
+                return;
+            }
+
+            scrollViewer.ScrollToHorizontalOffset(Math.Min(position.HorizontalOffset, scrollViewer.ScrollableWidth));
+            scrollViewer.ScrollToVerticalOffset(Math.Min(position.VerticalOffset, scrollViewer.ScrollableHeight));
+        }), DispatcherPriority.Loaded);
+    }
+
+    private static bool SkinHelpEntryMatchesPosition(SkinHelpEntry entry, SkinHelpGridPosition position)
+    {
+        return position.SourcePath is not null &&
+               entry.SourceLineNumber == position.SourceLineNumber &&
+               entry.IsTemplate == position.IsTemplate &&
+               string.Equals(entry.SourcePath, position.SourcePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static T? FindVisualDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T typedChild)
+            {
+                return typedChild;
+            }
+
+            var descendant = FindVisualDescendant<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+
+
+    private static T? FindVisualAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T typedCurrent)
+            {
+                return typedCurrent;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
+    }
     private void InsertSelectedSkinHelpLine()
     {
         if (SkinHelpGrid.SelectedItem is not SkinHelpEntry entry)
@@ -3105,6 +3784,16 @@ public partial class MainWindow : Window
         };
     }
 
+    private void ApplySkinHelpEntryEditIfChanged(SkinHelpEntry entry, string editedColumn, SkinHelpEditSnapshot? editSnapshot)
+    {
+        if (editSnapshot is not null && editSnapshot.Matches(entry, editedColumn) && editSnapshot.HasSameValues(entry))
+        {
+            return;
+        }
+
+        ApplySkinHelpEntryEdit(entry, editedColumn);
+    }
+
     private void ApplySkinHelpEntryEdit(SkinHelpEntry entry, string editedColumn)
     {
         if (_applyingSkinHelpEdit || !entry.CanEdit)
@@ -3120,7 +3809,6 @@ public partial class MainWindow : Window
                 ApplySkinHelpFilter();
                 return;
             }
-
             if (entry.IsTemplate)
             {
                 ApplySkinHelpTemplateEdit(entry, csv);
@@ -3354,6 +4042,7 @@ public partial class MainWindow : Window
     private void LoadSkinObjectGroups(string path)
     {
         var currentGroup = string.Empty;
+        var sortOrder = 0;
         foreach (var rawLine in File.ReadLines(path, Encoding.UTF8))
         {
             var line = rawLine.Trim();
@@ -3365,7 +4054,17 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            if (line.StartsWith('#') && currentGroup.Length > 0)
+            if (!line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            if (!_skinHelpSortOrderByCommand.ContainsKey(line))
+            {
+                _skinHelpSortOrderByCommand[line] = sortOrder++;
+            }
+
+            if (currentGroup.Length > 0)
             {
                 _skinHelpGroupByCommand[line] = currentGroup;
             }
@@ -3563,6 +4262,50 @@ public partial class MainWindow : Window
         Title = (_dirty ? "*" : string.Empty) + name + " - LR2 Skin Editor Next";
     }
 
+    private sealed record PreviewCommandCompletion(string Command, string Group)
+    {
+        public string Label => string.IsNullOrWhiteSpace(Group) ? Command : $"{Command}  {Group}";
+    }
+
+    private readonly record struct PreviewCodeCompletionContext(int Start, int Length, string Prefix);
+    private sealed record SkinHelpEditSnapshot(
+        string SourcePath,
+        int SourceLineNumber,
+        bool IsTemplate,
+        string EditedColumn,
+        string Command,
+        string Arguments,
+        string RawLine)
+    {
+        public static SkinHelpEditSnapshot Capture(SkinHelpEntry entry, string editedColumn)
+        {
+            return new SkinHelpEditSnapshot(
+                entry.SourcePath,
+                entry.SourceLineNumber,
+                entry.IsTemplate,
+                editedColumn,
+                entry.Command,
+                entry.Arguments,
+                entry.RawLine);
+        }
+
+        public bool Matches(SkinHelpEntry entry, string editedColumn)
+        {
+            return SourceLineNumber == entry.SourceLineNumber &&
+                   IsTemplate == entry.IsTemplate &&
+                   string.Equals(SourcePath, entry.SourcePath, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(EditedColumn, editedColumn, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public bool HasSameValues(SkinHelpEntry entry)
+        {
+            return string.Equals(Command, entry.Command, StringComparison.Ordinal) &&
+                   string.Equals(Arguments, entry.Arguments, StringComparison.Ordinal) &&
+                   string.Equals(RawLine, entry.RawLine, StringComparison.Ordinal);
+        }
+    }
+
+    private sealed record SkinHelpGridPosition(string? SourcePath, int SourceLineNumber, bool IsTemplate, double VerticalOffset, double HorizontalOffset);
     private sealed record SkinImportEntry(string FullPath, string RelativePath, string DisplayName);
     private sealed record PreviewCodeDocumentSpec(string Path, bool IsMain);
     private sealed record PreviewCsvLineUpdate(string Path, int LineNumber, string Csv);
