@@ -175,18 +175,28 @@ public sealed class Lr2SkinWriter
 
     public static IReadOnlyList<string> ImageObjectLines(int imageSlot, int sourceWidth, int sourceHeight, Lr2DstSpec dst)
     {
+        return ImageObjectLines(0, imageSlot, sourceWidth, sourceHeight, dst);
+    }
+
+    public static IReadOnlyList<string> ImageObjectLines(int index, int imageSlot, int sourceWidth, int sourceHeight, Lr2DstSpec dst)
+    {
         // imageSlot is the zero-based #IMAGE registration order, not a number written on #IMAGE itself.
         return [
-            SourceLine("#SRC_IMAGE", 0, imageSlot, 0, 0, sourceWidth, sourceHeight, 1, 1, 0, 0, 0, 0, 0, 0, 0),
-            DstLine("#DST_IMAGE", 0, dst)
+            SourceLine("#SRC_IMAGE", index, imageSlot, 0, 0, sourceWidth, sourceHeight, 1, 1, 0, 0, 0, 0, 0, 0, 0),
+            DstLine("#DST_IMAGE", index, dst)
         ];
     }
 
     public static IReadOnlyList<string> NumberObjectLines(int imageSlot, int sourceWidth, int sourceHeight, int valueOption, Lr2DstSpec dst)
     {
+        return NumberObjectLines(0, imageSlot, sourceWidth, sourceHeight, valueOption, dst);
+    }
+
+    public static IReadOnlyList<string> NumberObjectLines(int index, int imageSlot, int sourceWidth, int sourceHeight, int valueOption, Lr2DstSpec dst)
+    {
         return [
-            SourceLine("#SRC_NUMBER", 0, imageSlot, 0, 0, sourceWidth, sourceHeight, 10, 1, 0, 0, valueOption, 0, 0, 0, 0),
-            DstLine("#DST_NUMBER", 0, dst)
+            SourceLine("#SRC_NUMBER", index, imageSlot, 0, 0, sourceWidth, sourceHeight, 10, 1, 0, 0, valueOption, 0, 0, 0, 0),
+            DstLine("#DST_NUMBER", index, dst)
         ];
     }
 

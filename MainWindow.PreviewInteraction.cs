@@ -74,8 +74,30 @@ public partial class MainWindow
 
         _previewContextPoint = e.GetPosition(PreviewCanvas);
         PreviewCanvas.Focus();
-        SelectPreviewItemAt(_previewContextPoint.Value, beginObjectDrag: false);
+        if (!IsSelectedPreviewItemAt(_previewContextPoint.Value))
+        {
+            SelectPreviewItemAt(_previewContextPoint.Value, beginObjectDrag: false);
+        }
     }
+
+    private bool IsSelectedPreviewItemAt(Point point)
+    {
+        if (_selectedPreviewObjectId is null)
+        {
+            return false;
+        }
+
+        var item = _previewItems.FirstOrDefault(candidate => candidate.Object.Id == _selectedPreviewObjectId.Value);
+        if (item is null)
+        {
+            return false;
+        }
+
+        var dest = item.Destination;
+        return point.X >= dest.X && point.X <= dest.X + dest.Width &&
+               point.Y >= dest.Y && point.Y <= dest.Y + dest.Height;
+    }
+
     private void PreviewCanvas_MouseMove(object sender, MouseEventArgs e)
     {
         if (_panningPreview)
@@ -439,6 +461,11 @@ public partial class MainWindow
             throw new InvalidOperationException("Selected object SRC line is no longer a #SRC_ CSV row.");
         }
 
+        if (fields[0].Equals("#SRC_TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            return csv;
+        }
+
         CsvUtil.SetInt(fields, 3, item.SourceX);
         CsvUtil.SetInt(fields, 4, item.SourceY);
         CsvUtil.SetInt(fields, 5, item.SourceWidth);
@@ -503,7 +530,23 @@ public partial class MainWindow
             return false;
         }
 
-        var lineGroups = BuildPreviewObjectDeletionLineGroups(item);
+        return DeleteObjectLineGroups(
+            BuildPreviewObjectDeletionLineGroups(item),
+            $"object #{item.Id} {item.Kind}",
+            $"Deleted object #{item.Id}.");
+    }
+
+    private bool DeleteObjectLineGroups(
+        Dictionary<string, List<int>> lineGroups,
+        string deleteLabel,
+        string successStatus)
+    {
+        if (_document is null)
+        {
+            SetStatus("Create or open a .lr2skin file first.");
+            return false;
+        }
+
         var deleteLineCount = lineGroups.Values.Sum(lines => lines.Distinct().Count());
         if (deleteLineCount == 0)
         {
@@ -513,7 +556,7 @@ public partial class MainWindow
 
         var answer = MessageBox.Show(
             this,
-            $"Delete object #{item.Id} {item.Kind} and {deleteLineCount:N0} code line(s)?",
+            $"Delete {deleteLabel} and {deleteLineCount:N0} code line(s)?",
             "Delete object",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -534,11 +577,14 @@ public partial class MainWindow
         _selectedPreviewObjectId = null;
         _selectedPreviewItem = null;
         ObjectsGrid.SelectedItem = null;
+        SkinHelpGrid.SelectedItem = null;
+        SkinHelpDetailBox.Text = string.Empty;
+        LoadSkinHelpEasyEditor(null);
         _dirty = true;
         UpdateTitle();
         RefreshDocumentFromEditor();
         RenderPreview();
-        SetStatus($"Deleted object #{item.Id}.");
+        SetStatus(successStatus);
         return true;
     }
 

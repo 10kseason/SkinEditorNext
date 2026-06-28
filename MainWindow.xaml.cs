@@ -551,6 +551,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private int ReadNextObjectIndex(string commandSuffix)
+    {
+        if (_document is null)
+        {
+            return 0;
+        }
+
+        return _document.Objects
+            .Where(item =>
+                item.SourceIndex < 9000 &&
+                item.CommandSuffix.Equals(commandSuffix, StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.SourceIndex)
+            .DefaultIfEmpty(-1)
+            .Max() + 1;
+    }
+
     private void AddObject_Click(object sender, RoutedEventArgs e)
     {
         if (_document is null)
@@ -575,13 +591,21 @@ public partial class MainWindow : Window
                 lines.Add(Lr2SkinWriter.FontLine());
             }
 
-            lines.AddRange(Lr2SkinWriter.TextObjectLines(fontSlot, textKind, align: 1, dst));
+            lines.AddRange(Lr2SkinWriter.TextObjectLines(ReadNextObjectIndex("TEXT"), fontSlot, textKind, align: 1, dst));
         }
         else
         {
-            if (!TryGetSelectedImageSlot(out var imageSlot)) return;
+            var imageSlot = ImageAssetBox.SelectedItem as SkinImageSlot ?? _document.ImageSlots.FirstOrDefault();
+            if (imageSlot is null)
+            {
+                SetStatus("Add an image asset first, then create image or number objects.");
+                ImageAssetBox.Focus();
+                return;
+            }
+
             var sourceWidth = dst.Width;
             var sourceHeight = dst.Height;
+
             // For image/number objects, default SRC size to the actual asset size when it can be read.
             if (Lr2ImageProbe.TryGetSize(imageSlot.ResolvedPath, out var imageWidth, out var imageHeight))
             {
@@ -592,20 +616,23 @@ public partial class MainWindow : Window
             if (string.Equals(kind, "number", StringComparison.OrdinalIgnoreCase))
             {
                 if (!TryReadInt(CreateValueBox, "number op1", out var numberOp)) return;
-                lines.AddRange(Lr2SkinWriter.NumberObjectLines(imageSlot.Index, sourceWidth, sourceHeight, numberOp, dst));
+                lines.AddRange(Lr2SkinWriter.NumberObjectLines(ReadNextObjectIndex("NUMBER"), imageSlot.Index, sourceWidth, sourceHeight, numberOp, dst));
             }
             else
             {
-                lines.AddRange(Lr2SkinWriter.ImageObjectLines(imageSlot.Index, sourceWidth, sourceHeight, dst));
+                lines.AddRange(Lr2SkinWriter.ImageObjectLines(ReadNextObjectIndex("IMAGE"), imageSlot.Index, sourceWidth, sourceHeight, dst));
             }
         }
 
         AppendGeneratedLines(lines, $"{kind} object");
         RefreshDocumentFromEditor();
+        SkinObjectView? addedObject = null;
         if (selectNewestObject)
         {
-            ObjectsGrid.SelectedItem = _document?.Objects.LastOrDefault();
+            addedObject = _document?.Objects.LastOrDefault();
+            ObjectsGrid.SelectedItem = addedObject;
         }
+        SelectSkinHelpEntryForObject(addedObject);
         RenderPreview();
         SetStatus($"Added {kind} object.");
     }
@@ -650,16 +677,17 @@ public partial class MainWindow : Window
 
     private void DeleteObjectFromHelpContext_Click(object sender, RoutedEventArgs e)
     {
-        if (SkinHelpGrid.SelectedItem is not SkinHelpEntry entry)
+        if (SkinHelpGrid.SelectedItem is SkinHelpEntry entry &&
+            TryBuildSkinHelpEntryDeletionLineGroups(entry, out var lineGroups, out var deleteLabel))
         {
-            SetStatus("Right-click a helper object row first.");
+            DeleteObjectLineGroups(lineGroups, deleteLabel, $"Deleted {deleteLabel}.");
             return;
         }
 
-        var item = FindObjectForSkinHelpEntry(entry);
+        var item = ReadSelectedSkinObject();
         if (item is null)
         {
-            SetStatus("This helper row is not a preview object row.");
+            SetStatus("Select a helper row or object first.");
             return;
         }
 
@@ -723,18 +751,147 @@ public partial class MainWindow : Window
         if (entry.Command.StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase))
         {
             return _document.Objects.FirstOrDefault(item =>
-                item.SrcLine == entry.SourceLineNumber && IsSamePath(item.SourceFile, entry.SourcePath));
+                    item.SrcLine == entry.SourceLineNumber && IsSamePath(item.SourceFile, entry.SourcePath))
+                ?? _document.Objects.FirstOrDefault(item =>
+                    item.SrcLine == entry.SourceLineNumber &&
+                    item.Kind.Equals(entry.Command, StringComparison.OrdinalIgnoreCase));
         }
 
         if (entry.Command.StartsWith("#DST_", StringComparison.OrdinalIgnoreCase))
         {
+            var suffix = EntryCommandSuffix(entry.Command, "#DST_");
             return _document.Objects.FirstOrDefault(item =>
-                IsSamePath(ReadObjectDstFile(item), entry.SourcePath) &&
-                item.Frames.Any(frame => frame.Line == entry.SourceLineNumber));
+                    item.Frames.Any(frame => frame.Line == entry.SourceLineNumber) &&
+                    IsSamePath(ReadObjectDstFile(item), entry.SourcePath))
+                ?? _document.Objects.FirstOrDefault(item =>
+                    item.Frames.Any(frame => frame.Line == entry.SourceLineNumber) &&
+                    item.CommandSuffix.Equals(suffix, StringComparison.OrdinalIgnoreCase));
         }
 
         return null;
     }
+
+    private bool TryBuildSkinHelpEntryDeletionLineGroups(
+        SkinHelpEntry entry,
+        out Dictionary<string, List<int>> lineGroups,
+        out string deleteLabel)
+    {
+        lineGroups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+        deleteLabel = string.Empty;
+
+        if (_document is null || entry.IsTemplate || !TryReadObjectCommandParts(entry.Command, out var prefix, out var suffix))
+        {
+            return false;
+        }
+
+        var fields = CsvUtil.Split(entry.RawLine);
+        if (fields.Count < 2)
+        {
+            return false;
+        }
+
+        var targetIndex = CsvUtil.IntAt(fields, 1, int.MinValue);
+        if (targetIndex == int.MinValue)
+        {
+            return false;
+        }
+
+        var srcCommand = "#SRC_" + suffix;
+        var dstCommand = "#DST_" + suffix;
+        var sourcePath = entry.SourcePath;
+        var selectedLine = entry.SourceLineNumber;
+
+        if (prefix.Equals("#SRC_", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDeletionLine(lineGroups, entry.SourcePath, entry.SourceLineNumber);
+            foreach (var line in EnumerateMatchingObjectLines(dstCommand, targetIndex, sourcePath, selectedLine, afterSelectedLine: true))
+            {
+                AddDeletionLine(lineGroups, line.SourcePath, line.SourceLine);
+            }
+        }
+        else
+        {
+            var sourceLine = EnumerateMatchingObjectLines(srcCommand, targetIndex, sourcePath, selectedLine, afterSelectedLine: false)
+                .LastOrDefault();
+            if (sourceLine is not null)
+            {
+                AddDeletionLine(lineGroups, sourceLine.SourcePath, sourceLine.SourceLine);
+            }
+
+            foreach (var line in EnumerateMatchingObjectLines(dstCommand, targetIndex, sourcePath, selectedLine, afterSelectedLine: true))
+            {
+                AddDeletionLine(lineGroups, line.SourcePath, line.SourceLine);
+            }
+        }
+
+        deleteLabel = $"{srcCommand}/{dstCommand} index {targetIndex}";
+        return lineGroups.Values.Any(lines => lines.Count > 0);
+    }
+
+    private IEnumerable<SkinCommandLine> EnumerateMatchingObjectLines(
+        string command,
+        int targetIndex,
+        string sourcePath,
+        int selectedLine,
+        bool afterSelectedLine)
+    {
+        if (_document is null)
+        {
+            yield break;
+        }
+
+        foreach (var line in _document.Lines)
+        {
+            if (!line.Command.Equals(command, StringComparison.OrdinalIgnoreCase) ||
+                !IsSamePath(line.SourcePath, sourcePath) ||
+                CsvUtil.IntAt(line.Fields, 1, int.MinValue) != targetIndex)
+            {
+                continue;
+            }
+
+            if (afterSelectedLine && line.SourceLine < selectedLine)
+            {
+                continue;
+            }
+
+            if (!afterSelectedLine && line.SourceLine > selectedLine)
+            {
+                continue;
+            }
+
+            yield return line;
+        }
+    }
+
+    private static bool TryReadObjectCommandParts(string command, out string prefix, out string suffix)
+    {
+        prefix = string.Empty;
+        suffix = string.Empty;
+
+        if (command.StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "#SRC_";
+            suffix = EntryCommandSuffix(command, prefix);
+            return suffix.Length > 0;
+        }
+
+        if (command.StartsWith("#DST_", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "#DST_";
+            suffix = EntryCommandSuffix(command, prefix);
+            return suffix.Length > 0;
+        }
+
+        return false;
+    }
+
+    private static string EntryCommandSuffix(string command, string prefix)
+    {
+        return command.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? command[prefix.Length..]
+            : string.Empty;
+    }
+
     private void ObjectsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ObjectsGrid.SelectedItem is not SkinObjectView item)

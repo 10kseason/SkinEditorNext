@@ -160,6 +160,43 @@ public partial class MainWindow
         var label = showingTemplates ? "template" : "skin row";
         SkinHelpSummaryText.Text = $"{filtered.Count:N0} / {sourceRows.Count:N0} {label}(s)";
     }
+    private void SelectSkinHelpEntryForObject(SkinObjectView? item)
+    {
+        if (item is null || SkinHelpGrid is null)
+        {
+            return;
+        }
+
+        SelectCurrentSkinHelpMode();
+        if (SkinHelpSearchBox is not null && !string.IsNullOrWhiteSpace(SkinHelpSearchBox.Text))
+        {
+            SkinHelpSearchBox.Text = string.Empty;
+        }
+        else
+        {
+            ApplySkinHelpFilter(preservePosition: false);
+        }
+
+        var rows = SkinHelpGrid.ItemsSource as IEnumerable<SkinHelpEntry> ?? _skinHelpRows;
+        var destinationPath = ReadObjectDstFile(item);
+        var selectedEntry = rows.FirstOrDefault(entry =>
+                item.DstLine > 0 &&
+                entry.SourceLineNumber == item.DstLine &&
+                IsSamePath(entry.SourcePath, destinationPath))
+            ?? rows.FirstOrDefault(entry =>
+                entry.SourceLineNumber == item.SrcLine &&
+                IsSamePath(entry.SourcePath, item.SourceFile));
+
+        if (selectedEntry is null)
+        {
+            return;
+        }
+
+        SkinHelpGrid.SelectedItem = selectedEntry;
+        SkinHelpGrid.ScrollIntoView(selectedEntry);
+        SkinHelpDetailBox.Text = selectedEntry.Detail;
+        LoadSkinHelpEasyEditor(selectedEntry);
+    }
     private List<SkinHelpEntry> SortSkinHelpRows(List<SkinHelpEntry> rows)
     {
         return rows
