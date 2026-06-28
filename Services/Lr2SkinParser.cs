@@ -73,11 +73,14 @@ public sealed class Lr2SkinParser
             var src = CsvUtil.Split(lines[item.SrcLine - 1]);
             if (src.Count > 0 && src[0].StartsWith("#SRC_", StringComparison.OrdinalIgnoreCase))
             {
-                CsvUtil.SetInt(src, 3, item.SourceX);
-                CsvUtil.SetInt(src, 4, item.SourceY);
-                CsvUtil.SetInt(src, 5, item.SourceWidth);
-                CsvUtil.SetInt(src, 6, item.SourceHeight);
-                lines[item.SrcLine - 1] = CsvUtil.Join(src);
+                if (!src[0].Equals("#SRC_TEXT", StringComparison.OrdinalIgnoreCase))
+                {
+                    CsvUtil.SetInt(src, 3, item.SourceX);
+                    CsvUtil.SetInt(src, 4, item.SourceY);
+                    CsvUtil.SetInt(src, 5, item.SourceWidth);
+                    CsvUtil.SetInt(src, 6, item.SourceHeight);
+                    lines[item.SrcLine - 1] = CsvUtil.Join(src);
+                }
             }
         }
 

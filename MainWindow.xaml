@@ -492,8 +492,8 @@
                                       PreviewMouseRightButtonDown="DataGrid_PreviewMouseRightButtonDown">
                                 <DataGrid.ContextMenu>
                                     <ContextMenu>
-                                        <MenuItem Header="New Object" Click="CreateObjectFromHelpContext_Click"/>
-                                        <MenuItem Header="Delete Helper Object" Click="DeleteObjectFromHelpContext_Click"/>
+                                        <MenuItem Header="&#xAC1D;&#xCCB4; &#xCD94;&#xAC00;" Click="CreateObjectFromHelpContext_Click"/>
+                                        <MenuItem Header="&#xAC1D;&#xCCB4; &#xC9C0;&#xC6B0;&#xAE30;" Click="DeleteObjectFromHelpContext_Click"/>
                                     </ContextMenu>
                                 </DataGrid.ContextMenu>
                                 <DataGrid.CellStyle>
@@ -585,23 +585,33 @@
                                         </DataGrid.Columns>
                                     </DataGrid>
 
-                                    <UniformGrid Grid.Row="4" Columns="3" Margin="0,10,0,8">
-                                        <Button x:Name="SkinHelpEasyApplyButton"
-                                                Content="적용"
-                                                MinHeight="30"
-                                                Margin="0,0,6,0"
-                                                Click="SkinHelpEasyApply_Click"/>
-                                        <Button x:Name="SkinHelpEasyInsertButton"
-                                                Content="코드에 넣기"
-                                                MinHeight="30"
-                                                Margin="0,0,6,0"
-                                                Click="SkinHelpEasyInsert_Click"/>
-                                        <Button x:Name="SkinHelpEasyResetButton"
-                                                Content="되돌리기"
-                                                MinHeight="30"
-                                                Click="SkinHelpEasyReset_Click"/>
-                                    </UniformGrid>
-
+                                    <StackPanel Grid.Row="4" Margin="0,10,0,8">
+                                        <UniformGrid Columns="3">
+                                            <Button x:Name="SkinHelpEasyApplyButton"
+                                                    Content="&#xC801;&#xC6A9;"
+                                                    MinHeight="30"
+                                                    Margin="0,0,6,0"
+                                                    Click="SkinHelpEasyApply_Click"/>
+                                            <Button x:Name="SkinHelpEasyInsertButton"
+                                                    Content="&#xCF54;&#xB4DC;&#xC5D0; &#xB123;&#xAE30;"
+                                                    MinHeight="30"
+                                                    Margin="0,0,6,0"
+                                                    Click="SkinHelpEasyInsert_Click"/>
+                                            <Button x:Name="SkinHelpEasyResetButton"
+                                                    Content="&#xB418;&#xB3CC;&#xB9AC;&#xAE30;"
+                                                    MinHeight="30"
+                                                    Click="SkinHelpEasyReset_Click"/>
+                                        </UniformGrid>
+                                        <UniformGrid Columns="2" Margin="0,8,0,0">
+                                            <Button Content="&#xAC1D;&#xCCB4; &#xCD94;&#xAC00;"
+                                                    MinHeight="30"
+                                                    Margin="0,0,6,0"
+                                                    Click="CreateObjectFromHelpContext_Click"/>
+                                            <Button Content="&#xAC1D;&#xCCB4; &#xC9C0;&#xC6B0;&#xAE30;"
+                                                    MinHeight="30"
+                                                    Click="DeleteObjectFromHelpContext_Click"/>
+                                        </UniformGrid>
+                                    </StackPanel>
                                     <Expander Grid.Row="5" Header="고급 CSV" IsExpanded="False">
                                         <TextBox x:Name="SkinHelpEasyCsvBox"
                                                  IsReadOnly="True"
